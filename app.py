@@ -34,6 +34,7 @@ llm = load_llm()
 st.session_state['embedder_ref'] = embedder
 
 with st.sidebar:
+    st.title("Management")
     st.subheader('Document Status')
     if st.session_state.doc_name:
         st.success(f'**{st.session_state.doc_name}**')
@@ -53,71 +54,71 @@ with st.sidebar:
 
     else:
         st.info('No document loaded.')
-
     st.divider()
 
 
     render_chunk_settings()
-
     st.divider()
 
     render_clear_controls()
-
     st.divider()
 
     render_history_sidebar()
     st.divider()
-    st.caption('SmartDoc AI v1.1')
+    st.caption('ADI v1.1')
 
 
 st.markdown("""
 <div class="sd-header">
-    <h1>SmartDoc AI</h1>
-    <p>Intelligent Document Q&amp;A — ask anything about your documents</p>
-    <span class="sd-badge">Qwen2.5:3b</span>
-    <span class="sd-badge">MPNet 768-dim</span>
-    <span class="sd-badge">FAISS</span>
-    <span class="sd-badge">Conv. Memory</span>
+    <h1>ADI: Advanced Document Intelligence</h1>
+    <p>Intelligence at Your Fingertips — Ask, Discover, Learn</p>
 </div>
 """, unsafe_allow_html=True)
 
-
-st.subheader('Upload Document')
-
-upload_file = st.file_uploader(
+if not st.session_state.doc_name:
+    st.subheader('Upload Document')
+    upload_file = st.file_uploader(
     'Drag & drop or click to browse',
     type=SUPPORTED_TYPES,
     help='Supported: PDF, DOCX. Recommended size < 50MB',
     key=f"uploader_{st.session_state.get('uploader_key', 0)}",
-)
+    )
 
-if upload_file:
-    size_mb = upload_file.size / ( 1024 * 1024 )
+    if upload_file:
+        size_mb = upload_file.size / ( 1024 * 1024 )
 
-    st.text(f'File: {upload_file.name} ({size_mb:.1f} MB)')
+        st.text(f'File: {upload_file.name} ({size_mb:.1f} MB)')
 
-    if st.session_state.doc_name != upload_file.name:
-        progress_bar = st.progress(0, text='Preparing...')
-        progress_bar.progress(20, text='Reading document...')
-        progress_bar.progress(55, text='Splitting into chunks...')
-        progress_bar.progress(75, text='Generating embeddings on GPU...')
+        if st.session_state.doc_name != upload_file.name:
+            progress_bar = st.progress(0, text='Preparing...')
+            progress_bar.progress(20, text='Reading document...')
+            progress_bar.progress(55, text='Splitting into chunks...')
+            progress_bar.progress(75, text='Generating embeddings on GPU...')
 
-        result = process_document(upload_file.read(), upload_file.name, embedder)
+            result = process_document(upload_file.read(), upload_file.name, embedder)
 
-        progress_bar.progress(100, text='Done!')
-        progress_bar.empty()
-    
-        if result:
-            st.session_state.update(result)
-            st.session_state.conv_memory = []
-            st.session_state.chunk_metrics = []
-            st.success(
-                f"Ready — **{result['doc_chunks']} chunks** "
-                f"(avg {result['avg_chunk_len']} chars) indexed from "
-                f"**{upload_file.name}**"
-            )
-        else:
-            st.error('Processing failed. Please try another file.')
+            progress_bar.progress(100, text='Done!')
+            progress_bar.empty()
+        
+            if result:
+                st.session_state.update(result)
+                st.session_state.conv_memory = []
+                st.session_state.chunk_metrics = []
+                st.success(
+                    f"Ready — **{result['doc_chunks']} chunks** "
+                    f"(avg {result['avg_chunk_len']} chars) indexed from "
+                    f"**{upload_file.name}**"
+                )
+                st.rerun()
+            else:
+                st.error('Processing failed. Please try another file.')
+else:
+    st.info(f'The system is ready with document: **{st.session_state.doc_name}**')
+    if st.button('Upload a different file'):
+        st.session_state.doc_name = None
+        st.session_state.vector_store = None
+        st.session_state.retriever = None
+        st.rerun()
 st.divider()
 
 
@@ -129,15 +130,25 @@ use_conv = st.toggle(
     help='When ON the assistant can answer follow-up questions using chat history.',
 )
 
+if 'last_answer' not in st.session_state:
+    st.session_state.last_answer = None
+if 'last_question' not in st.session_state:
+    st.session_state.last_question = None
+if 'last_sources' not in st.session_state:
+    st.session_state.last_sources = []
+
 if st.session_state.retriever is None:
     st.warning('Upload a document above before asking questions.')
 else:
-    question = st.text_input(
-        'Your question:',
-        placeholder='e.g. What are the main findings? / Can you elaborate on that?',
-    )
+    with st.form(key='chat_form', clear_on_submit=True):
 
-    if question and question.strip():
+        question = st.text_input(
+            'Your question:',
+            placeholder='e.g. What are the main findings? / Can you elaborate on that?',
+        )
+        submit_button = st.form_submit_button(label='Send')
+
+    if submit_button and question.strip():
         with st.spinner('Search and generating answer...'):
             if use_conv:
                 answer, sources = get_answer_with_memory(
@@ -147,14 +158,24 @@ else:
                 answer, sources = get_answer(
                     question, st.session_state.retriever, llm 
                 )
+            
+            final_answer = answer.content if hasattr(answer, 'content') else str(answer)
+
+            add_to_history(question, final_answer)
+
+            st.session_state.last_question = question
+            st.session_state.last_answer = final_answer
+            st.session_state.last_cources = sources
+
+            st.rerun()
         
-        st.markdown(f"""
-        <div class="sd-answer">
-            <div class="sd-answer-label">Answer</div>
-            {answer}
-        </div>
-        """, unsafe_allow_html=True)
+if st.session_state.last_answer:
+    st.write(f'**Question:** {st.session_state.last_question}')
+    st.markdown(f"""
+    <div class="sd-answer">
+        <div class="sd-answer-label">Answer</div>
+        {st.session_state.last_answer}
+    </div>
+    """, unsafe_allow_html=True)
 
-        render_citations(sources)
-
-        add_to_history(question, answer)
+    render_citations(st.session_state.last_sources)

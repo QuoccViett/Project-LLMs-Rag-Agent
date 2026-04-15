@@ -33,7 +33,7 @@ def _apply_chunk_strategy(size: int, overlap: int):
             'avg_len': result['avg_chunk_len'],
             'index_s': f'{elapsed:.1f}s',
         })
-        st.success(f"Re-indexed: **{result['doc_chunk']} chunks** in {elapsed:.1f}s")
+        st.success(f"Re-indexed: **{result['doc_chunks']} chunks** in {elapsed:.1f}s")
         st.rerun()
 
 def _render_metrics_table():
@@ -44,7 +44,7 @@ def _render_metrics_table():
             and m['overlap'] == st.session_state.chunk_overlap
         )
         style = 'background:#0d2137;font-weight:600;' if active else ''
-        row += (
+        rows += (
             f"<tr style='{style}'>"
             f"<td>#{i+1}</td>"
             f"<td>{m['size']}</td>"

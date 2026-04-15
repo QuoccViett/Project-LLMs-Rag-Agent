@@ -1,6 +1,6 @@
 import streamlit as st
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_ollama import OllamaLLM
+from langchain_ollama import ChatOllama
 from config import (
     EMBEDDING_MODEL, EMBEDDING_DEVICE,
     LLM_MODEL, LLM_TEMPERATURE, LLM_TOP_P,
@@ -16,8 +16,8 @@ def load_embedder() -> HuggingFaceEmbeddings:
     )
 
 @st.cache_resource(show_spinner='Connecting to Ollana LLM...')
-def load_llm() -> OllamaLLM:
-    return OllamaLLM(
+def load_llm() -> ChatOllama:
+    return ChatOllama(
         model=LLM_MODEL,
         temperature = LLM_TEMPERATURE,
         top_p = LLM_TOP_P,

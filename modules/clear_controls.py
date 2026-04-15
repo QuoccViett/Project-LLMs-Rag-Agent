@@ -19,6 +19,10 @@ def _confirm_action(key: str, label: str, on_confirm):
 
 def _clear_history():
     st.session_state.chat_history = []
+    st.session_state.conv_memory = []
+    st.session_state.last_question = None
+    st.session_state.last_answer = None
+    st.session_state.last_sources = []
     st.toast('Chat history cleared.')
 
 def _clear_document():
@@ -27,6 +31,10 @@ def _clear_document():
     st.session_state.doc_name = None
     st.session_state.doc_chunks = 0
     st.session_state.chat_history = []
+    st.session_state.conv_memory = []
+    st.session_state.last_question = None
+    st.session_state.last_answer = None
+    st.session_state.last_sources = []
     st.session_state.upload_key += 1
     st.toast('Document and history cleared.')
 

@@ -5,10 +5,12 @@ def init_history():
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
 
-def add_to_history(question: str, answer: str):
+def add_to_history(question: str, answer: any):
+    clean_answer = answer.content if hasattr(answer, 'content') else str(answer)
+    
     st.session_state.chat_history.append({
         'question': question,
-        'answer': answer,
+        'answer': clean_answer,
         'timestamp': time.strftime("%H:%M %d %b %Y"),
     })
 
