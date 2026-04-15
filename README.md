@@ -12,4 +12,4 @@ Tạo môi trường ảo: `python -m venv venv`
 Kích hoạt venv: `/venv/Scripts/activate`
 Cài thư viện: `pip install -r requirements.txt`
 Cài đặt Ollama và pull model: `ollama pull qwen2.5:3b`
-Chạy ứng dụng: `streamlit run app.py`
+Chạy ứng dụng: `python -m streamlit run app.py`
