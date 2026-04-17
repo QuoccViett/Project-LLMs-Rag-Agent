@@ -14,6 +14,8 @@ RETRIEVER_K = 7
 
 CONV_MEMORY_K = 4
 
+RERANK_FERCH_K = 10
+
 SUPPORTED_TYPES = ['pdf', 'docx', 'doc']
 
 APP_TITLE = 'ADI'
