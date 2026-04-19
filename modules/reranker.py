@@ -1,5 +1,5 @@
 from calendar import c
-
+from config import RETRIEVER_K
 import streamlit as st 
 
 _cross_encoder = None
@@ -33,7 +33,7 @@ def rerank(question: str, candidate_docs: list, top_n: int = RERANK_TOP_N) -> li
     return [doc for _, doc in scored[:top_n]]
 
 def retrieve_and_rerank(question: str, retriever, fetch_k: int = 10) -> list:
-    original_k = retriever.search_kwargs.get('k', 3)
+    original_k = retriever.search_kwargs.get('k', RETRIEVER_K)
     retriever.search_kwargs['k'] = fetch_k
 
     candidates = retriever.invoke(question)
