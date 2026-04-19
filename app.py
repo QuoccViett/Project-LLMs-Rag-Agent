@@ -192,6 +192,7 @@ with tab_single:
 
                 if use_self_rag:
                     result_sr = self_rag_answer(question, active_retriever, llm)
+                    st.session_state.last_self_rag_result = result_sr
                     answer = result_sr['answer']
                     sources = result_sr['source_docs']
 
@@ -199,9 +200,9 @@ with tab_single:
                     sources = retrieve_and_rerank(
                         question, active_retriever, fetch_k=RERANK_FERCH_K
                     )
-                    context = '\n\n'.join(d.page_content for d in sources)
+                    # context = '\n\n'.join(d.page_content for d in sources)
                     
-                    answer = llm.invoke(build_prompt(context, question))
+                    answer = llm.invoke(build_prompt('', question, source_docs=sources))
 
                 elif use_conv:
                     _orig = st.session_state.retriever
@@ -235,7 +236,9 @@ if st.session_state.last_answer:
     </div>
     """, unsafe_allow_html=True)
     if st.session_state.get('use_self_rag'):
-        render_self_rag_metadata(result_sr)
+        sr_data = st.session_state.get('last_self_rag_result')
+        if sr_data:
+            render_self_rag_metadata(sr_data)
     render_citations(st.session_state.last_sources)
             
 with tab_multi:

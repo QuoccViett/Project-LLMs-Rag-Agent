@@ -21,5 +21,6 @@ def load_llm() -> ChatOllama:
         model=LLM_MODEL,
         temperature = LLM_TEMPERATURE,
         top_p = LLM_TOP_P,
-        repeat_penalty=LLM_REPEAT_PENALTY
+        repeat_penalty=LLM_REPEAT_PENALTY,
+        num_gpu=99,
     )
