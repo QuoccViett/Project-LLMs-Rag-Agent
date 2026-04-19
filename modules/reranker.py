@@ -45,7 +45,7 @@ def retrieve_and_rerank(question: str, retriever, fetch_k: int = 10) -> list:
 def render_rerank_toggle():
     st.subheader('Re-ranking')
     use_rerank = st.toggle(
-        'Cross-Encoder re_ranking',
+        'Cross-Encoder Re_Ranking',
         value=st.session_state.get('use_rerank', False),
         key='toggle_rerank',
         help=(

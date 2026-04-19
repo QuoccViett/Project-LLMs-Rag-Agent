@@ -52,7 +52,8 @@ def render_hybrid_toggle():
     if use_hybird:
         st.markdown(
             '<span style="font-size:0.75rem;color:#7aaed0;">'
-            "BM25 40% · Vector 60%</span>",
+                "BM25 40% · Vector 60%"
+            "</span>",
             unsafe_allow_html=True,
         )
 
