@@ -71,6 +71,15 @@ with st.sidebar:
     render_chunk_settings()
     st.divider()
 
+    render_hybrid_toggle()
+    st.divider()
+
+    render_rerank_toggle()
+    st.divider()
+
+    render_self_rag_toggle()
+    st.divider()
+
     render_clear_controls()
     st.divider()
 
@@ -126,11 +135,6 @@ with tab_single:
                         build_and_store_hybrid(result['raw_docs'], result['vector_store'])
 
 
-                    # st.success(
-                    #     f"Ready — **{result['doc_chunks']} chunks** "
-                    #     f"(avg {result['avg_chunk_len']} chars) indexed from "
-                    #     f"**{upload_file.name}**"
-                    # )
                     st.rerun()
                 else:
                     st.error('Processing failed. Please try another file.')
@@ -146,9 +150,6 @@ with tab_single:
             st.session_state.uploader_key = st.session_state.get('uploader_key', 0) + 1
             st.rerun()
     st.divider()
-
-
-
 
     st.subheader('Ask a Question')
 
@@ -233,13 +234,15 @@ if st.session_state.last_answer:
         {st.session_state.last_answer}
     </div>
     """, unsafe_allow_html=True)
+    if st.session_state.get('use_self_rag'):
+        render_self_rag_metadata(result_sr)
     render_citations(st.session_state.last_sources)
             
 with tab_multi:
     st.subheader('Multi Document Q&A')
     st.caption(
         'Upload multiple document. Each is indexed separately with its filename as metadata. '
-        'Use teh filter to restrict to specific documents.'
+        'Use the filter to restrict to specific documents.'
     )
 
     active_multi_retriever = render_multi_doc_panel(embedder)
@@ -252,7 +255,7 @@ with tab_multi:
     else:
         q_multi = st.text_input(
             'Your question:',
-            placeholder='e.g Compare teh approaches described in both documents.',
+            placeholder='e.g Compare the approaches described in both documents.',
             key='q_multi',
         )
 
@@ -260,12 +263,20 @@ with tab_multi:
             with st.spinner('Searching across documents...'):
                 answer_m, sources_m = get_answer(q_multi, active_multi_retriever, llm)
 
+            if hasattr(answer_m, 'content'):
+                display_text = answer_m.content 
+            else:
+                display_text = answer_m
             st.markdown(f"""
             <div class="sd-answer">
                 <div class="sd-answer-label">Answer</div>
-                {answer_m}
+                {display_text}
             </div>
             """, unsafe_allow_html=True)
+
+            render_citations(sources_m)
+
+
 
             if sources_m:
                 st.markdown('---')

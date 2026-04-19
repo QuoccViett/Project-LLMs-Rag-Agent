@@ -39,7 +39,7 @@ def add_document(file_bytes: bytes, filename: str, embedder) -> bool:
         upload_time = time.strftime("%H:%M %d/%m/%Y")
         tagged_chunks = []
         for chunk in chunks:
-            new_meta = dict(chunk.metadata),
+            new_meta = dict(chunk.metadata)
             new_meta['source_file'] = filename
             new_meta['upload_time'] = upload_time
             tagged_chunks.append(
@@ -65,7 +65,7 @@ def add_document(file_bytes: bytes, filename: str, embedder) -> bool:
 
         registry = st.session_state.get('doc_registry', {})
         registry[filename] = {
-            'chunk': len(tagged_chunks),
+            'chunks': len(tagged_chunks),
             'upload_time': upload_time,
             'ext': ext.upper(),
         }
@@ -129,12 +129,14 @@ def render_multi_doc_panel(embedder):
         help='Each uploaded document is added to the shared index.'
     )
 
-    if new_file and new_file not in registry:
-        with st.spinner(f'Adding {new_file.name}...'):
-            ok = add_document(new_file.read(), new_file.name, embedder)
-        if ok:
-            st.success(f'Added: {new_file.name}')
-            st.rerun()
+    if new_file:
+        if new_file.name not in registry:
+            with st.spinner(f'Adding {new_file.name}...'):
+                file_bytes = new_file.read()
+                ok = add_document(file_bytes, new_file.name, embedder)
+            if ok:
+                st.success(f'Added: {new_file.name}')
+                st.rerun()
 
     if not registry:
         st.caption('No documents loaded.')

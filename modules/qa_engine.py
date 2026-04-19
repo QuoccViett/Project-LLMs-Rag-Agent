@@ -7,18 +7,28 @@ def build_prompt(context: str, question: str) -> str:
 
     if lang == 'vi':
         return (
-            "Use the context below to answer the question. "
-            "If you don't know, say no. Reply concisely (3-4 sentences) in Vietnamese.\n\n"
-            f"Context:\n{context}\n\n"
-            f"Question: {question}\n\n"
-            "Answer:"
+            "Bạn là một chuyên gia phân tích tài liệu (ADI System). "
+            "Hãy sử dụng thông tin từ các tài liệu được cung cấp dưới đây để trả lời câu hỏi của người dùng một cách chính xác nhất.\n\n"
+            "YÊU CẦU QUAN TRỌNG:\n"
+            "1. CHỈ sử dụng thông tin trong Context được cung cấp. Không tự suy diễn.\n"
+            "2. Trả lời chi tiết, có cấu trúc (sử dụng gạch đầu dòng nếu cần).\n"
+            "3. TRẢ LỜI HOÀN TOÀN BẰNG TIẾNG VIỆT. Tuyệt đối không sử dụng tiếng Trung hay tiếng Anh.\n"
+            "4. TUYỆT ĐỐI KHÔNG sử dụng tiếng Trung, chữ Hán hoặc bất kỳ ngôn ngữ nào khác ngoài tiếng Việt.\n"
+            "5. Nếu thông tin không có trong context, hãy nói 'Tôi không tìm thấy thông tin này trong tài liệu.'\n\n"
+            f"--- CONTEXT ---\n{context}\n\n"
+            f"--- CÂU HỎI ---\n{question}\n\n"
+            "--- TRẢ LỜI ---"
         )
     return (
-        "Use the context below to answer the question. "
-            "If you don't know, say no. Keep the answer concise (3-4 sentences).\n\n"
-            f"Context:\n{context}\n\n"
-            f"Question: {question}\n\n"
-            "Answer:"
+        "You are an Advanced Document Intelligence (ADI) expert. "
+        "Use the following context to provide a professional and detailed answer.\n\n"
+        "RULES:\n"
+        "1. Answer based ONLY on the provided context.\n"
+        "2. If the answer is missing, say 'Information not found in documents.'\n"
+        "3. Reply in a structured and clear manner.\n\n"
+        f"Context:\n{context}\n\n"
+        f"Question: {question}\n\n"
+        "Answer:"
     )
 
 def get_answer(question: str, retriever, llm) -> tuple[str, list]:

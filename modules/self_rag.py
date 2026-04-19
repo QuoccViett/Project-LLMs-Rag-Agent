@@ -101,7 +101,7 @@ def self_rag_answer(question: str, retriever, llm) -> dict:
 def render_self_rag_toggle():
     st.subheader('Self-RAG')
     use_self_rag = st.toggle(
-        'Self-RAG (query rewrite + confidence)', 
+        'Self-RAG (Query Rewrite + Confidence)', 
         value=st.session_state.get('use_self_rag', False),
         key='toggle_self_rag',
         help=(
@@ -140,7 +140,7 @@ def render_self_rag_metadata(result: dict):
         ">
             <span style="color:#0099ff;font-family:'IBM Plex Mono',monospace;
                          text-transform:uppercase;font-size:0.7rem;">
-                🧬 Self-RAG evaluation
+                Self-RAG evaluation
             </span><br><br>
             <b>Confidence:</b>
             <span style="color:{conf_color};font-weight:700;">{confidence}/100</span>
@@ -148,7 +148,7 @@ def render_self_rag_metadata(result: dict):
             <b>Relevance:</b> {relevance}
             &nbsp;·&nbsp;
             <b>Grounded:</b> {groundedness}
-            {"&nbsp;·&nbsp;<span style='color:#f0a000;'>⟳ retried with original query</span>" if retried else ""}
+            {"&nbsp;·&nbsp;<span style='color:#f0a000;'>retried with original query</span>" if retried else ""}
             <br>
             <span style="color:#4a6a8a;">Rewritten query: "{rewritten_q}"</span>
         </div>
