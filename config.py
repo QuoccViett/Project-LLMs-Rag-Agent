@@ -1,8 +1,8 @@
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
 EMBEDDING_DEVICE = 'cuda'
-LLM_MODEL = 'qwen2.5:3b'
-LLM_TEMPERATURE = 0.1
-LLM_TOP_P = 0.1
+LLM_MODEL = 'qwen2.5:7b-instruct-q4_K_M'
+LLM_TEMPERATURE = 0.7
+LLM_TOP_P = 0.9
 LLM_REPEAT_PENALTY = 1.1
 
 CHUNK_SIZE = 800
@@ -12,7 +12,7 @@ CHUNK_OVERLAP_OPTIONS = [50, 80, 100, 200]
 
 RETRIEVER_K = 6
 
-CONV_MEMORY_K = 4
+CONV_MEMORY_K = 3
 
 RERANK_FERCH_K = 20
 
