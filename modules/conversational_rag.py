@@ -161,7 +161,7 @@ def get_answer_with_memory(question: str, retriever, llm) -> tuple[str, list]:
         page_mentions = re.findall(r'trang\s*\d+|page\s*\d+', standalone.lower())
         needed_k = max(len(page_mentions) * 2, RETRIEVER_K)
         try:
-            original_k = retriever.search_kwrags.get('k', RETRIEVER_K)
+            original_k = retriever.search_kwargs.get('k', RETRIEVER_K)
             retriever.search_kwargs['k'] = needed_k
             source_docs = retriever.invoke(standalone)
             retriever.search_kwargs['k'] = original_k
@@ -170,8 +170,8 @@ def get_answer_with_memory(question: str, retriever, llm) -> tuple[str, list]:
     else:
         source_docs = retriever.invoke(standalone)
 
-    context = '\n\n'.join(doc.page_content for doc in source_docs)
-    prompt = _build_conv_prompt(context, question, memory, source_docs)
+    # context = '\n\n'.join(doc.page_content for doc in source_docs)
+    prompt = _build_conv_prompt('', question, memory, source_docs)
     answer = llm.invoke(prompt)
     answer_text = answer.content if hasattr(answer, 'content') else str(answer)
     memory.append(HumanMessage(content=question))

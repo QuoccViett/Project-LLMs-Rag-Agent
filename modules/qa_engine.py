@@ -105,7 +105,7 @@ def get_answer(question: str, retriever, llm) -> tuple[str, list]:
         needed_k = max(len(page_mentions) * 2, RETRIEVER_K)
 
         try:
-            original_k = retriever.search_kwrags.get('k', RETRIEVER_K)
+            original_k = retriever.search_kwargs.get('k', RETRIEVER_K)
             retriever.search_kwrags['k'] = needed_k
             source_docs = retriever.invoke(question)
             retriever.search_kwargs['k'] = original_k
