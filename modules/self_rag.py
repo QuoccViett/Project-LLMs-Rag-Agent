@@ -1,10 +1,43 @@
 import re
-from unittest import result
 import streamlit as st
-from config import RETRIEVER_K
+from config import ( 
+    RETRIEVER_K, EMBEDDING_MODEL, LLM_MODEL,
+    CHUNK_SIZE, CHUNK_OVERLAP        
+)
 
 CONFIDENCE_THRESHOLD = 60
 MAX_RETRIES = 1
+
+_SYSTEM_INFO = f"""
+=== THÔNG TIN KIẾN TRÚC HỆ THỐNG ADI ===
+- Embedding model  : {EMBEDDING_MODEL}
+- Số chiều vector  : 768  (paraphrase-multilingual-mpnet-base-v2)
+- LLM model        : {LLM_MODEL}
+- Vector database  : FAISS (cosine similarity)
+- Framework        : LangChain + Streamlit
+- Chunk size mặc định  : {CHUNK_SIZE} ký tự
+- Chunk overlap mặc định: {CHUNK_OVERLAP} ký tự
+- Số chunks retrieve (k): {RETRIEVER_K}
+- Hybrid search    : BM25 (40%) + Vector FAISS (60%) qua EnsembleRetriever
+- Re-ranking       : CrossEncoder ms-marco-MiniLM-L-6-v2
+""".strip()
+
+_SYSTEM_KW = [
+    "embedding", "vector", "chiều", "dimension", "mpnet",
+    "faiss", "chunk", "overlap", "retriever", "llm", "model", "qwen",
+    "kiến trúc", "hệ thống", "architecture", "framework", "langchain",
+    "paraphrase", "sentence-transformer", "768", "cosine",
+    "bm25", "hybrid", "cross-encoder", "rerank",
+]
+
+def _is_system_query(question: str) -> bool:
+    q=question.lower()
+    return any(kw in q for kw in _SYSTEM_KW)
+
+def _llm_text(response) -> str:
+    if hasattr(response, 'context'):
+        return response.content.strip()
+    return str(response).strip()
 
 def _rewrite_query(question: str, llm) -> str:
     prompt = (
@@ -15,8 +48,8 @@ def _rewrite_query(question: str, llm) -> str:
         "Rewritten:"
     )
     try:
-        rewritten = llm.invoke(prompt).strip()
-        if len(rewritten) < 5 or '\n' in rewritten or len(rewritten) > 300:
+        rewritten = _llm_text(llm.invoke(prompt))
+        if not rewritten or len(rewritten) < 5 or '\n' in rewritten or len(rewritten) > 300:
             return question
         return rewritten
     except Exception:
@@ -43,9 +76,10 @@ def _parse_evaluation(raw: str) -> dict:
     rel_match = re.search(r'RELEVANCE[:\s]+(high|medium|low)', raw, re.IGNORECASE)
     if rel_match:
         result['relevance'] = rel_match.group(1).lower()
-        gnd_match = re.search(
-            r'GROUNDEDNESS[:\s]+(grounded|partial|not grounded)', raw, re.IGNORECASE
-        )
+
+    gnd_match = re.search(
+        r'GROUNDEDNESS[:\s]+(grounded|partial|not grounded)', raw, re.IGNORECASE
+    )
     if gnd_match:
         result['groundedness'] = gnd_match.group(1).lower()
 
@@ -65,25 +99,29 @@ def _evaluate(question: str, context: str, answer: str, llm) -> dict:
         "Evaluation:"
     )
     try:
-        raw = llm.invoke(eval_prompt)
+        raw = _llm_text(llm.invoke(eval_prompt))
         return _parse_evaluation(raw)
     except Exception:
         return {'confidence': 50, 'relevance': 'medium', 'groundedness': 'partial'}
 
 def self_rag_answer(question: str, retriever, llm) -> dict:
     rewritten = _rewrite_query(question, llm)
-    source_docs = retriever.invoke(rewritten)
-    context = '\n\n'.join(doc.page_content for doc in source_docs)
+
+    if _is_system_query(question):
+        context = _SYSTEM_INFO
+        source_docs = []
+    else:
+        source_docs = retriever.invoke(rewritten)
+        context = '\n\n'.join(doc.page_content for doc in source_docs)
 
     answer = _generate_answer(context, question, llm)
     evaluation = _evaluate(question, context, answer, llm)
 
     retried = False
 
-    if evaluation['confidence'] < CONFIDENCE_THRESHOLD:
+    if evaluation['confidence'] < CONFIDENCE_THRESHOLD and not _is_system_query(question):
         retried = True
-        fallback_query = question
-        source_docs = retriever.invoke(fallback_query)
+        source_docs = retriever.invoke(question)
         context = '\n\n'.join(doc.page_content for doc in source_docs)
         answer = _generate_answer(context, question, llm)
         evaluation = _evaluate(question, context, answer, llm)
@@ -115,9 +153,9 @@ def render_self_rag_toggle():
 
 def render_self_rag_metadata(result: dict):
     confidence = result.get('confidence', 0)
-    relevance = result.get('relevance', 0)
+    relevance = result.get('relevance', '-')
     groundedness = result.get('groundedness', '-')
-    rewritten_q = result.get('rewritten', '')
+    rewritten_q = result.get('rewritten_q', '')
     retried = result.get('retried', False)
 
     if confidence >= 75:
@@ -149,9 +187,7 @@ def render_self_rag_metadata(result: dict):
             &nbsp;·&nbsp;
             <b>Grounded:</b> {groundedness}
             {"&nbsp;·&nbsp;<span style='color:#f0a000;'>retried with original query</span>" if retried else ""}
-            <br>
-            <span style="color:#4a6a8a;">Rewritten query: "{rewritten_q}"</span>
         </div>
         """,
         unsafe_allow_html=True,
-    ) 
+    )

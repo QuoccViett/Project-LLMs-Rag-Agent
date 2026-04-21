@@ -9,7 +9,7 @@ faiss-cpu
 rank-bm25
 pdfplumber
 pypdf
-python-docx
+python-docx 
 docx2txt
 ollama
 numpy
