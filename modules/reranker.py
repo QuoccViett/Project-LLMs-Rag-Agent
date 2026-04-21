@@ -1,11 +1,11 @@
-from calendar import c
+import time
 from config import RETRIEVER_K
 import streamlit as st 
 
 _cross_encoder = None
 
 CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-RERANK_TOP_N = 3
+RERANK_TOP_N = 7
 
 def _get_cross_encoder():
     global _cross_encoder
@@ -32,15 +32,32 @@ def rerank(question: str, candidate_docs: list, top_n: int = RERANK_TOP_N) -> li
 
     return [doc for _, doc in scored[:top_n]]
 
-def retrieve_and_rerank(question: str, retriever, fetch_k: int = 10) -> list:
-    original_k = retriever.search_kwargs.get('k', RETRIEVER_K)
-    retriever.search_kwargs['k'] = fetch_k
+def retrieve_and_rerank(question: str, retriever, fetch_k: int = 20) -> list:
+    original_k = None
+    search_kwargs = getattr(retriever, 'search_kwargs', None)
+    if search_kwargs is not None:
+        original_k = search_kwargs.get('k', RETRIEVER_K)
+        search_kwargs['k'] = fetch_k
 
+    t0 = time.time()
     candidates = retriever.invoke(question)
+    retrieval_ms = (time.time() - t0) * 1000
 
-    retriever.search_kwargs['k'] = original_k
+    if search_kwargs is not None and original_k is not None:
+        search_kwargs['k'] = original_k
 
-    return rerank(question, candidates)
+    t1 = time.time()
+    reranked = rerank(question, candidates)
+    rerank_ms = (time.time() - t1) * 1000
+
+    st.session_state['rerank_metrics'] = {
+        'retrieval_ms': round(retrieval_ms),
+        'rerank_ms': round(rerank_ms),
+        'candidates': len(candidates),
+        'top_n': len(reranked),
+    }
+
+    return reranked
 
 def render_rerank_toggle():
     st.subheader('Re-ranking')
@@ -61,5 +78,15 @@ def render_rerank_toggle():
             f"Model: {CROSS_ENCODER_MODEL}</span>",
             unsafe_allow_html=True,
         )
+        metrics = st.session_state.get('rerank_metrics')
+        if metrics:
+            st.markdown(
+                f'<span style="font-size:0.72rem;color:#4a6a8a;">'
+                f"Last: retrieve {metrics['retrieval_ms']}ms · "
+                f"rerank {metrics['rerank_ms']}ms · "
+                f"{metrics['candidates']} → {metrics['top_n']} docs"
+                f"</span>",
+                unsafe_allow_html=True,
+            )
 
     return use_rerank

@@ -17,13 +17,19 @@ from modules.conversational_rag import (
 )
 from modules.qa_engine import get_answer
 from modules.hybrid_search import (
-    build_and_store_hybrid, render_hybrid_toggle, get_hybrid_retriever_or_fallback
+    build_and_store_hybrid, compare_hybrid_vs_vector,
+    render_hybrid_toggle, get_hybrid_retriever_or_fallback
 )
 from modules.multi_doc import render_multi_doc_panel
 from modules.reranker import render_rerank_toggle, retrieve_and_rerank
 from modules.self_rag import (
     self_rag_answer, render_self_rag_toggle, render_self_rag_metadata
 )
+from modules.comparison_rag import (
+    detect_comparison, comparison_rag_answer, 
+    render_comparison_metadata, render_comparison_tonggle
+)
+
 from modules.qa_engine import build_prompt
 from langchain_community.vectorstores import FAISS as _F 
 
@@ -78,6 +84,9 @@ with st.sidebar:
     st.divider()
 
     render_self_rag_toggle()
+    st.divider()
+
+    render_comparison_tonggle()
     st.divider()
 
     render_clear_controls()
@@ -183,6 +192,7 @@ with tab_single:
                 use_hybrid = st.session_state.get('use_hybrid', False)
                 use_rerank = st.session_state.get('use_rerank', False)
                 use_self_rag = st.session_state.get('use_self_rag', False)
+                use_cmp_auto = st.session_state.get('use_comparison_auto', True)
 
                 active_retriever = (
                     get_hybrid_retriever_or_fallback()
@@ -190,7 +200,17 @@ with tab_single:
                     else st.session_state.retriever
                 )
 
-                if use_self_rag:
+                is_comparison = use_cmp_auto and detect_comparison(question)
+
+                st.session_state.last_comparison_result = None
+                st.session_state.last_self_rag_result = None
+                if is_comparison:
+                    result_cmp = comparison_rag_answer(question, active_retriever, llm)
+                    st.session_state.last_comparison_result = result_cmp
+                    answer = result_cmp['answer']
+                    sources = result_cmp['source_docs']
+
+                elif use_self_rag:
                     result_sr = self_rag_answer(question, active_retriever, llm)
                     st.session_state.last_self_rag_result = result_sr
                     answer = result_sr['answer']
@@ -216,6 +236,9 @@ with tab_single:
                     answer, sources = get_answer(
                         question, st.session_state.retriever, llm 
                     )
+
+            if use_hybrid and question.strip():
+                st.session_state['hybrid_compare'] = compare_hybrid_vs_vector(question) or {}
             
             final_answer = answer.content if hasattr(answer, 'content') else str(answer)
 
@@ -229,12 +252,19 @@ with tab_single:
         
 if st.session_state.last_answer:
     st.write(f'**Question:** {st.session_state.last_question}')
+    cmp_result = st.session_state.get('last_comparison_result')
+    display_html = (
+        cmp_result.get('answer_html', st.session_state.last_answer)
+        if cmp_result
+        else st.session_state.last_answer
+    )
     st.markdown(f"""
     <div class="sd-answer">
         <div class="sd-answer-label">Answer</div>
-        {st.session_state.last_answer}
+        {display_html}
     </div>
     """, unsafe_allow_html=True)
+    
     if st.session_state.get('use_self_rag'):
         sr_data = st.session_state.get('last_self_rag_result')
         if sr_data:
@@ -264,12 +294,15 @@ with tab_multi:
 
         if q_multi and q_multi.strip() and active_multi_retriever:
             with st.spinner('Searching across documents...'):
-                answer_m, sources_m = get_answer(q_multi, active_multi_retriever, llm)
-
-            if hasattr(answer_m, 'content'):
-                display_text = answer_m.content 
-            else:
-                display_text = answer_m
+                if st.session_state.get('use_comparison_auto', True) and detect_comparison(q_multi):
+                    result_m = comparison_rag_answer(q_multi, active_multi_retriever, llm)
+                    display_text = result_m.get('answer_html', result_m['answer'])
+                    sources_m    = result_m['source_docs']
+                else:
+                    answer_m, sources_m = get_answer(q_multi, active_multi_retriever, llm)
+                    display_text = (
+                        answer_m.content if hasattr(answer_m, 'content') else answer_m
+                    )
             st.markdown(f"""
             <div class="sd-answer">
                 <div class="sd-answer-label">Answer</div>
