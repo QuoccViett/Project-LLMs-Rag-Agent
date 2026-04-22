@@ -165,29 +165,30 @@ def render_self_rag_metadata(result: dict):
     else:
         conf_color = "#cc3333"
  
-    st.markdown(
-        f"""
-        <div style="
-            background:#0a151f;
-            border:1px solid #1e3a5f;
-            border-radius:8px;
-            padding:0.8rem 1rem;
-            margin-top:0.6rem;
-            font-size:0.82rem;
-            color:#7aaed0;
-        ">
-            <span style="color:#0099ff;font-family:'IBM Plex Mono',monospace;
-                         text-transform:uppercase;font-size:0.7rem;">
-                Self-RAG evaluation
-            </span><br><br>
-            <b>Confidence:</b>
-            <span style="color:{conf_color};font-weight:700;">{confidence}/100</span>
-            &nbsp;·&nbsp;
-            <b>Relevance:</b> {relevance}
-            &nbsp;·&nbsp;
-            <b>Grounded:</b> {groundedness}
-            {"&nbsp;·&nbsp;<span style='color:#f0a000;'>retried with original query</span>" if retried else ""}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    retry_html = f"&nbsp;·&nbsp;<span style='color:#f0a000;'>retried with original query</span>" if retried else ""
+
+    html_content = f"""
+<div style="
+    background:#0a151f;
+    border:1px solid #1e3a5f;
+    border-radius:8px;
+    padding:0.8rem 1rem;
+    margin-top:0.6rem;
+    font-size:0.82rem;
+    color:#7aaed0;
+">
+    <span style="color:#0099ff;font-family:'IBM Plex Mono',monospace;
+                 text-transform:uppercase;font-size:0.7rem;">
+        Self-RAG evaluation
+    </span><br><br>
+    <b>Confidence:</b>
+    <span style="color:{conf_color};font-weight:700;">{confidence}/100</span>
+    &nbsp;·&nbsp;
+    <b>Relevance:</b> {relevance}
+    &nbsp;·&nbsp;
+    <b>Grounded:</b> {groundedness}
+    {retry_html}
+</div>
+    """.strip()
+
+    st.markdown(html_content, unsafe_allow_html=True)
