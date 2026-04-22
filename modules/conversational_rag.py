@@ -107,9 +107,12 @@ def _build_conv_prompt(context: str, question: str, memory: list, source_docs: l
             "Mỗi đoạn được đánh nhãn [Đoạn X | Trang Y] — "
             "hãy dùng đúng số liệu từ đúng trang, "
             "KHÔNG được lẫn lộn số liệu giữa các trang khác nhau.\n"
-            "2. PHẢI trả lời hoàn toàn bằng TIẾNG VIỆT. "
-            "Tuyệt đối KHÔNG dùng tiếng Anh, tiếng Trung, tiếng Nga, tiếng Indonesia "
-            "hay bất kỳ ngôn ngữ nào khác dù chỉ một từ.\n"
+            "2. NGÔN NGỮ — QUY TẮC TUYỆT ĐỐI:\n"
+            "   PHẢI viết HOÀN TOÀN bằng TIẾNG VIỆT.\n"
+            "   CẤM TUYỆT ĐỐI dùng: tiếng Anh, tiếng Trung (中文/汉字), tiếng Nga,\n"
+            "   tiếng Indonesia, tiếng Nhật hay bất kỳ ngôn ngữ nào khác.\n"
+            "   Ví dụ SAI: '根据文件' hoặc 'According to' hoặc 'Berdasarkan'\n"
+            "   Ví dụ ĐÚNG: 'Theo tài liệu' hoặc 'Dựa trên tài liệu'\n"
             "3. Nếu không tìm thấy thông tin, nói: "
             "'Tôi không tìm thấy thông tin này trong tài liệu.' "
             "KHÔNG được tự bịa đặt hay suy diễn thêm số liệu.\n"
@@ -118,7 +121,7 @@ def _build_conv_prompt(context: str, question: str, memory: list, source_docs: l
             f"Ngữ cảnh tài liệu:\n{context}\n\n"
             f"{history_section}"
             f"Người dùng: {question}\n\n"
-            "Trợ lý (trả lời bằng tiếng Việt):"
+            "Trợ lý (viết hoàn toàn bằng tiếng Việt, không dùng bất kỳ ngôn ngữ nào khác):"
         )
     else:
         history_section = (
@@ -134,9 +137,12 @@ def _build_conv_prompt(context: str, question: str, memory: list, source_docs: l
             "Each chunk is labeled [Chunk X | Page Y] — "
             "use figures from the correct page only, "
             "do NOT mix up figures between different pages.\n"
-            "2. Reply in ENGLISH only. "
-            "Do NOT use Chinese, Russian, Vietnamese, Indonesian "
-            "or any other language — not even a single word.\n"
+            "2. LANGUAGE — ABSOLUTE RULE:\n"
+            "   Reply ENTIRELY in ENGLISH.\n"
+            "   FORBIDDEN: Chinese (中文), Russian, Vietnamese, Indonesian, Japanese\n"
+            "   or any other language — not even a single word.\n"
+            "   WRONG example: '根据文件' or 'Theo tài liệu'\n"
+            "   RIGHT example: 'According to the document'\n"
             "3. If you cannot find the answer, say: "
             "'I cannot find this information in the document.' "
             "Do NOT fabricate or infer figures.\n"
@@ -145,7 +151,7 @@ def _build_conv_prompt(context: str, question: str, memory: list, source_docs: l
             f"Document context:\n{context}\n\n"
             f"{history_section}"
             f"User: {question}\n\n"
-            "Assistant:"
+            "Assistant (English only, absolutely no other language):"
         )
 
 def get_answer_with_memory(question: str, retriever, llm) -> tuple[str, list]:
@@ -160,12 +166,13 @@ def get_answer_with_memory(question: str, retriever, llm) -> tuple[str, list]:
     if _mentions_multiple_pages(standalone):
         page_mentions = re.findall(r'trang\s*\d+|page\s*\d+', standalone.lower())
         needed_k = max(len(page_mentions) * 2, RETRIEVER_K)
-        try:
+        search_kwargs = getattr(retriever, 'search_kwargs', None)
+        if search_kwargs is not None:
             original_k = retriever.search_kwargs.get('k', RETRIEVER_K)
-            retriever.search_kwargs['k'] = needed_k
+            search_kwargs['k'] = needed_k
             source_docs = retriever.invoke(standalone)
-            retriever.search_kwargs['k'] = original_k
-        except:
+            search_kwargs['k'] = original_k
+        else:
             source_docs = retriever.invoke(standalone)
     else:
         source_docs = retriever.invoke(standalone)

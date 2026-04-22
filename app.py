@@ -20,7 +20,7 @@ from modules.hybrid_search import (
     build_and_store_hybrid, compare_hybrid_vs_vector,
     render_hybrid_toggle, get_hybrid_retriever_or_fallback
 )
-from modules.multi_doc import render_multi_doc_panel
+from modules.multi_doc import render_multi_doc_panel, get_multidoc_answer, get_multidoc_answer_with_memory
 from modules.reranker import render_rerank_toggle, retrieve_and_rerank
 from modules.self_rag import (
     self_rag_answer, render_self_rag_toggle, render_self_rag_metadata
@@ -69,7 +69,44 @@ with st.sidebar:
         """, unsafe_allow_html=True)
         render_memory_badge()
 
-    else:
+    registry = st.session_state.get('doc_registry', {})
+    if registry:
+        # st.divider()
+        total_chunks_multi = sum(info['chunks'] for info in registry.values())
+        st.markdown(
+            f'<p style="font-family:\'IBM Plex Mono\',monospace;font-size:0.7rem;'
+            f'text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.4rem;">'
+            f'Multi-Doc ({len(registry)} file{"s" if len(registry)>1 else ""})</p>',
+            unsafe_allow_html=True,
+        )
+        for fname, info in registry.items():
+            ext = info.get('ext', '')
+            chunks = info.get('chunks', 0)
+            size_str = info.get('size_display', '')
+            badge_color = '#1a6b3c' if ext == 'PDF' else '#1a3a6b'
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.3rem;">'
+                f'<span style="background:{badge_color};color:#c0d8f0;font-family:\'IBM Plex Mono\','
+                f'monospace;font-size:0.6rem;padding:1px 5px;border-radius:3px;">{ext}</span>'
+                f'<span style="color:#4a6a8a;font-size:0.78rem;flex:1;word-break:break-all;">{fname}</span>'
+                f'<span style="color:#4a6a8a;font-size:0.7rem;white-space:nowrap;">{chunks} chunks</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown(
+            f'<span style="font-size:0.7rem;color:#4a6a8a;">{total_chunks_multi} total chunks</span>',
+            unsafe_allow_html=True,
+        )
+        n_multi = len(st.session_state.get('multi_conv_memory', [])) // 2
+        if n_multi:
+            st.markdown(
+                f'<span style="font-size:0.72rem;color:#7aaed0;">'
+                f'Multi memory: <b>{n_multi}</b> turn{"s" if n_multi>1 else ""}</span>',
+                unsafe_allow_html=True,
+            )
+    
+
+    if not st.session_state.doc_name and not registry:
         st.info('No document loaded.')
     st.divider()
 
@@ -86,8 +123,8 @@ with st.sidebar:
     render_self_rag_toggle()
     st.divider()
 
-    render_comparison_tonggle()
-    st.divider()
+    # render_comparison_tonggle()
+    # st.divider()
 
     render_clear_controls()
     st.divider()
@@ -103,6 +140,35 @@ st.markdown("""
     <p>Intelligence at Your Fingertips — Ask, Discover, Learn</p>
 </div>
 """, unsafe_allow_html=True)
+
+_TAB_JS = """
+<script>
+(function() {
+    const targetTab = window.parent.sessionStorage.getItem('adi_active_tab') || 'single';
+    if (targetTab === 'multi') {
+        const tryClick = setInterval(() => {
+            const tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
+            if (tabs.length >= 2) {
+                tabs[1].click();
+                clearInterval(tryClick);
+            }
+        }, 80);
+    }
+    // Track which tab user clicks
+    const watchTabs = setInterval(() => {
+        const tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
+        if (tabs.length >= 2) {
+            tabs[0].addEventListener('click', () =>
+                window.parent.sessionStorage.setItem('adi_active_tab', 'single'));
+            tabs[1].addEventListener('click', () =>
+                window.parent.sessionStorage.setItem('adi_active_tab', 'multi'));
+            clearInterval(watchTabs);
+        }
+    }, 100);
+})();
+</script>
+"""
+st.components.v1.html(_TAB_JS, height=0)
 
 tab_single, tab_multi = st.tabs(['Single Document', 'Multi Document'])
 
@@ -251,7 +317,15 @@ with tab_single:
             st.rerun()
         
 if st.session_state.last_answer:
-    st.write(f'**Question:** {st.session_state.last_question}')
+    st.markdown(
+        f'<div style="background:#0d1f30;border-left:3px solid #0099ff;border-radius:6px;'
+        f'padding:0.55rem 0.9rem;margin-bottom:0.7rem;">'
+        f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.68rem;'
+        f'color:#0099ff;text-transform:uppercase;letter-spacing:0.08em;">Question</span><br>'
+        f'<span style="font-size:0.93rem;color:#e8f4ff;font-weight:500;">'
+        f'{st.session_state.last_question}</span></div>',
+        unsafe_allow_html=True,
+    )
     cmp_result = st.session_state.get('last_comparison_result')
     display_html = (
         cmp_result.get('answer_html', st.session_state.last_answer)
@@ -272,64 +346,64 @@ if st.session_state.last_answer:
     render_citations(st.session_state.last_sources)
             
 with tab_multi:
-    st.subheader('Multi Document Q&A')
-    st.caption(
-        'Upload multiple document. Each is indexed separately with its filename as metadata. '
-        'Use the filter to restrict to specific documents.'
-    )
-
     active_multi_retriever = render_multi_doc_panel(embedder)
-
     st.divider()
     st.subheader('Ask a Question')
 
     if not st.session_state.get('doc_registry'):
         st.warning('Add at least one document above before asking questions.')
     else:
-        q_multi = st.text_input(
-            'Your question:',
-            placeholder='e.g Compare the approaches described in both documents.',
-            key='q_multi',
-        )
+        if 'multi_last_question' not in st.session_state:
+            st.session_state.multi_last_question = None
+        if 'multi_last_answer' not in st.session_state:
+            st.session_state.multi_last_answer = None
+        if 'multi_last_sources' not in st.session_state:
+            st.session_state.multi_last_sources = []
 
-        if q_multi and q_multi.strip() and active_multi_retriever:
+        use_multi_conv = st.toggle(
+            'Conversational mode (remembers previous questions)',
+            value=True,
+            help='When ON the assistant can answer follow-up questions using multi-doc chat history.',
+            key='toggle_multi_conv',
+        )
+        
+        with st.form(key = 'multi_chat_form', clear_on_submit=True):
+            q_multi = st.text_input(
+                'Your question:',
+                placeholder='e.g Compare the approaches described in both documents.',
+                key='q_multi',
+            )
+            submit_multi = st.form_submit_button(label='Send')
+
+        if submit_multi and q_multi.strip() and active_multi_retriever:
             with st.spinner('Searching across documents...'):
-                if st.session_state.get('use_comparison_auto', True) and detect_comparison(q_multi):
-                    result_m = comparison_rag_answer(q_multi, active_multi_retriever, llm)
-                    display_text = result_m.get('answer_html', result_m['answer'])
-                    sources_m    = result_m['source_docs']
-                else:
-                    answer_m, sources_m = get_answer(q_multi, active_multi_retriever, llm)
-                    display_text = (
-                        answer_m.content if hasattr(answer_m, 'content') else answer_m
+                if use_multi_conv:
+                    answer_m, sources_m = get_multidoc_answer_with_memory (
+                        q_multi, active_multi_retriever, llm
                     )
+                else:
+                    st.session_state.multi_conv_memory = []
+                    answer_m, sources_m = get_multidoc_answer(
+                        q_multi, active_multi_retriever, llm
+                    )
+                display_text = answer_m.content if hasattr(answer_m, 'content') else str(answer_m)
+            add_to_history(q_multi, display_text)
+            st.session_state.multi_last_question = q_multi
+            st.session_state.multi_last_answer = display_text
+            st.session_state.multi_last_sources = sources_m
+            st.rerun()
+
+        if st.session_state.multi_last_answer:
+            st.markdown(
+                f'<p style="font-size:0.9rem;margin-bottom:0.3rem;">'
+                f'<strong>Question:</strong> {st.session_state.multi_last_question}</p>',
+                unsafe_allow_html=True,
+            )
             st.markdown(f"""
             <div class="sd-answer">
                 <div class="sd-answer-label">Answer</div>
-                {display_text}
+                {st.session_state.multi_last_answer}
             </div>
             """, unsafe_allow_html=True)
 
-            render_citations(sources_m)
-
-
-
-            if sources_m:
-                st.markdown('---')
-                st.markdown(
-                    '<p style="font-family:\'IBM Plex Mono\',monospace;'
-                    'font-size:0.72rem;color:#0099ff;text-transform:uppercase;">'
-                    "Sources</p>",
-                    unsafe_allow_html=True,
-                )
-                for i, doc in enumerate(sources_m, 1):
-                    src_file = doc.metadata.get('source_file', 'unknown')
-                    page = doc.metadata.get('page', '')
-                    page_str = f' .Page {int(page) + 1}' if page != "" else ""
-                    preview = " ".join(doc.page_content.split())[:180]
-                    with st.expander(f'[{i}] {src_file}{page_str} - {preview}...'):
-                        st.markdown(
-                            f'<div class="sd-citation-body">{doc.page_content}</div>',
-                            unsafe_allow_html=True,
-                        )
-            add_to_history(q_multi, answer_m)
+            render_citations(st.session_state.multi_last_sources)
