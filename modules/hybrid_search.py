@@ -1,8 +1,55 @@
 import time
 import streamlit as st 
 from langchain_community.retrievers import BM25Retriever
-from langchain.retrievers import EnsembleRetriever
+try:
+    from langchain.retrievers import EnsembleRetriever  # type: ignore
+except Exception:  # pragma: no cover
+    try:
+        from langchain.retrievers.ensemble import EnsembleRetriever  # type: ignore
+    except Exception:  # pragma: no cover
+        EnsembleRetriever = None
+
 from config import RETRIEVER_K
+
+
+class _SimpleEnsembleRetriever:
+    def __init__(self, retrievers: list, weights: list[float], k: int = RETRIEVER_K):
+        self.retrievers = retrievers
+        self.weights = weights
+        self.search_kwargs = {'k': k}
+
+    def _doc_key(self, doc) -> str:
+        meta = getattr(doc, 'metadata', {}) or {}
+        src = meta.get('source_file', meta.get('source', ''))
+        page = meta.get('page', meta.get('page_number', ''))
+        content = getattr(doc, 'page_content', '') or ''
+        return f"{src}|{page}|{content[:200].strip()}"
+
+    def invoke(self, query: str):
+        k = int(self.search_kwargs.get('k', RETRIEVER_K) or RETRIEVER_K)
+        rrf_k = 60
+        scored: dict[str, tuple[float, any]] = {}
+
+        for retriever, weight in zip(self.retrievers, self.weights):
+            try:
+                docs = retriever.invoke(query) or []
+            except Exception:
+                docs = []
+
+            for rank, doc in enumerate(docs[:k], 1):
+                key = self._doc_key(doc)
+                score = float(weight) * (1.0 / (rrf_k + rank))
+                if key in scored:
+                    prev, keep_doc = scored[key]
+                    scored[key] = (prev + score, keep_doc)
+                else:
+                    scored[key] = (score, doc)
+
+        fused = sorted(scored.values(), key=lambda x: x[0], reverse=True)
+        return [doc for _, doc in fused[:k]]
+
+    def get_relevant_documents(self, query: str):
+        return self.invoke(query)
 
 
 def build_hybrid_retriever(documents: list, vector_store):
@@ -14,10 +61,17 @@ def build_hybrid_retriever(documents: list, vector_store):
         search_kwargs={'k': RETRIEVER_K},
     )
 
-    ensemble = EnsembleRetriever(
-        retrievers=[bm25_retriever, vector_retriever],
-        weights=[0.4, 0.6],
-    )
+    if EnsembleRetriever is not None:
+        ensemble = EnsembleRetriever(
+            retrievers=[bm25_retriever, vector_retriever],
+            weights=[0.4, 0.6],
+        )
+    else:
+        ensemble = _SimpleEnsembleRetriever(
+            retrievers=[bm25_retriever, vector_retriever],
+            weights=[0.4, 0.6],
+            k=RETRIEVER_K,
+        )
 
     return ensemble
 

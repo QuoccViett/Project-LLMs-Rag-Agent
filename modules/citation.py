@@ -1,4 +1,5 @@
 from ast import pattern
+import os
 import re
 from sys import prefix
 import streamlit as st 
@@ -7,7 +8,11 @@ from config  import CITATION_TOP_N, CITATION_PREVIEW_CHARS, CITATION_HIGHLIGHT_C
 
 def _get_source_file(doc) -> str:
     meta = getattr(doc, 'metadata', {}) or {}
-    return meta.get('source_file', meta.get('source', ''))
+    source = meta.get('source_file') or meta.get('source') or ''
+    # Avoid leaking full local paths (e.g. %TEMP% files) into the UI.
+    if isinstance(source, str) and ('\\' in source or '/' in source):
+        return os.path.basename(source)
+    return source
 
 def _get_page(doc) -> str:
     meta = getattr(doc, 'metadata', {}) or {}

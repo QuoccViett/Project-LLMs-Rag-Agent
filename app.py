@@ -312,6 +312,13 @@ with tab_single:
 
             st.session_state.last_question = question
             st.session_state.last_answer = final_answer
+            # Normalize source metadata so citations don't show temp file paths.
+            doc_name = st.session_state.get('doc_name')
+            if doc_name and isinstance(sources, list):
+                for d in sources:
+                    meta = getattr(d, 'metadata', None)
+                    if isinstance(meta, dict) and not meta.get('source_file'):
+                        meta['source_file'] = doc_name
             st.session_state.last_sources = sources
 
             st.rerun()

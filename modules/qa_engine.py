@@ -1,6 +1,8 @@
 import re
 from config import RETRIEVER_K
 
+# Edited by Copilot: qa_engine probe
+
 def _detect_language(text: str) -> str:
     vi_chart = "àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ"
     return 'vi' if any(c in text.lower() for c in vi_chart) else 'en'
@@ -104,12 +106,13 @@ def get_answer(question: str, retriever, llm) -> tuple[str, list]:
         page_mentions = re.findall(r'trang\s*\d+|page\s*\d+', question.lower())
         needed_k = max(len(page_mentions) * 2, RETRIEVER_K)
 
-        try:
-            original_k = retriever.search_kwargs.get('k', RETRIEVER_K)
-            retriever.search_kwrags['k'] = needed_k
+        search_kwargs = getattr(retriever, 'search_kwargs', None)
+        if search_kwargs is not None:
+            original_k = search_kwargs.get('k', RETRIEVER_K)
+            search_kwargs['k'] = needed_k
             source_docs = retriever.invoke(question)
-            retriever.search_kwargs['k'] = original_k
-        except AttributeError:
+            search_kwargs['k'] = original_k
+        else:
             source_docs = retriever.invoke(question)
     else:
         source_docs = retriever.invoke(question)

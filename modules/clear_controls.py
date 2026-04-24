@@ -35,7 +35,7 @@ def _clear_document():
     st.session_state.last_question = None
     st.session_state.last_answer = None
     st.session_state.last_sources = []
-    st.session_state.upload_key += 1
+    st.session_state.uploader_key = st.session_state.get('uploader_key', 0) + 1
     st.toast('Document and history cleared.')
 
 def render_clear_controls():

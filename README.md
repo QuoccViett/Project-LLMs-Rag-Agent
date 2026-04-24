@@ -9,7 +9,9 @@ Hệ thống hỏi đáp tài liệu thông minh sử dụng RAG (Retrieval-Augm
 
 ## Cách cài đặt
 Tạo môi trường ảo: `python -m venv venv`
-Kích hoạt venv: `/venv/Scripts/activate`
+Kích hoạt venv (Windows PowerShell): `./venv/Scripts/Activate.ps1`
 Cài thư viện: `pip install -r requirements.txt`
-Cài đặt Ollama và pull model: `ollama pull qwen2.5:7b`
+Cài đặt Ollama và pull model: `ollama pull qwen2.5:1.5b`
+Nếu terminal báo không nhận lệnh `ollama`, hãy mở lại terminal.
+*Tuỳ chọn:* đổi model Ollama bằng biến môi trường `OLLAMA_MODEL` (ví dụ: `qwen2.5:7b`).
 Chạy ứng dụng: `python -m streamlit run app.py`

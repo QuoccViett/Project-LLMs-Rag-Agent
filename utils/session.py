@@ -12,7 +12,7 @@ def init_session():
         'doc_bytes': None,
         'raw_docs': None,
         'avg_chunk_len': 0,
-        'upload_key': 0,
+        'uploader_key': 0,
 
         'chat_history': [],
         

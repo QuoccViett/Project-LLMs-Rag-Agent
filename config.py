@@ -1,6 +1,10 @@
+import os
+
+# Edited by Copilot: config probe
+
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
-EMBEDDING_DEVICE = 'cuda'
-LLM_MODEL = 'qwen2.5:7b-instruct-q4_K_M'
+EMBEDDING_DEVICE = 'auto'
+LLM_MODEL = os.getenv('OLLAMA_MODEL', 'qwen2.5:1.5b')
 LLM_TEMPERATURE = 0.7
 LLM_TOP_P = 0.9
 LLM_REPEAT_PENALTY = 1.1

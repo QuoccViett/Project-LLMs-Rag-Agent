@@ -5,11 +5,107 @@ import streamlit as st
 from langchain_community.document_loaders import PDFPlumberLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain.schema import Document
+try:
+    from langchain_core.documents import Document
+except Exception:  # pragma: no cover
+    from langchain.schema import Document  # type: ignore
 from config import CHUNK_SIZE, CHUNK_OVERLAP, RETRIEVER_K
 from langchain_core.messages import HumanMessage, AIMessage
 
+
+_CROSS_KW_VI = [
+    'hệ thống chính', 'hệ thống dự phòng', 'so sánh', 'đối chiếu',
+    'cả hai', 'cả ba', 'file nào', 'tài liệu nào', 'hai tài liệu',
+    'và hệ thống', 'còn hệ thống', 'quy trình khẩn cấp', 'bảo trì',
+    'nhật ký', 'có đúng', 'có phải', 'đúng quy định', 'giữa các', 'khác nhau',
+    'điểm chung', 'điểm khác', 'liệt kê', 'tổng hợp',
+]
+
+_CROSS_KW_EN = [
+    'main system', 'backup system', 'compare', 'both', 'which file',
+    'cross-reference', 'maintenance', 'log', 'correct', 'verify', 'compliant',
+    'difference', 'similarity', 'across', 'all documents', 'each file',
+]
+
+
+def _is_cross_question(question: str) -> bool:
+    q_lower = (question or '').lower()
+    return any(kw in q_lower for kw in (_CROSS_KW_VI + _CROSS_KW_EN))
+
+
+def _doc_source_file(doc) -> str:
+    meta = getattr(doc, 'metadata', {}) or {}
+    return meta.get('source_file') or meta.get('source') or ''
+
+
+def _rebalance_docs_by_file(docs: list, k: int) -> list:
+    if not docs:
+        return docs
+
+    buckets: dict[str, list] = {}
+    order: list[str] = []
+    for doc in docs:
+        src = _doc_source_file(doc) or '__unknown__'
+        if src not in buckets:
+            buckets[src] = []
+            order.append(src)
+        buckets[src].append(doc)
+
+    out: list = []
+    idx = 0
+    while len(out) < k and buckets:
+        src = order[idx % len(order)]
+        if src in buckets and buckets[src]:
+            out.append(buckets[src].pop(0))
+            if not buckets[src]:
+                buckets.pop(src, None)
+                order = [s for s in order if s != src]
+                idx = 0
+                continue
+        idx += 1
+        if not order:
+            break
+    return out
+
 MULTI_DOC_RETRIEVER_K = max(RETRIEVER_K * 2, 20)
+
+
+class _FileFilteredRetriever:
+    """A thin wrapper that filters retrieved docs by `source_file`.
+
+    We avoid relying on FAISS metadata filtering support, which varies by
+    LangChain version.
+    """
+
+    def __init__(self, base_retriever, allowed_files: list[str], k: int):
+        self.base_retriever = base_retriever
+        self.allowed_files = {f for f in (allowed_files or []) if f}
+        self.search_kwargs = {'k': int(k)}
+
+    def invoke(self, query: str):
+        k = int(self.search_kwargs.get('k', MULTI_DOC_RETRIEVER_K) or MULTI_DOC_RETRIEVER_K)
+        fetch_k = max(k * 5, 50)
+
+        base_sk = getattr(self.base_retriever, 'search_kwargs', None)
+        original_k = None
+        if base_sk is not None:
+            original_k = base_sk.get('k')
+            base_sk['k'] = fetch_k
+
+        try:
+            docs = self.base_retriever.invoke(query) or []
+        finally:
+            if base_sk is not None and original_k is not None:
+                base_sk['k'] = original_k
+
+        if not self.allowed_files:
+            return docs[:k]
+
+        filtered = [d for d in docs if _doc_source_file(d) in self.allowed_files]
+        return filtered[:k]
+
+    def get_relevant_documents(self, query: str):
+        return self.invoke(query)
 
 def _detect_language(text: str) -> bool:
     vi_chars = "àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ"
@@ -54,22 +150,7 @@ def build_multidoc_prompt(question: str, source_docs: list) -> str:
     needs_calc = _need_calculations(question)
     loaded_files = _list_loaded_files()
 
-    cross_kw_vi = [
-        'hệ thống chính', 'hệ thống dự phòng', 'so sánh', 'đối chiếu',
-        'cả hai', 'cả ba', 'file nào', 'tài liệu nào', 'hai tài liệu',
-        'và hệ thống', 'còn hệ thống', 'quy trình khẩn cấp', 'bảo trì',
-        'nhật ký', 'có đúng', 'có phải', 'đúng quy định', 'giữa các', 'khác nhau',
-        'điểm chung', 'điểm khác', 'liệt kê', 'tổng hợp',
-    ]
-
-    cross_kw_en = [
-        'main system', 'backup system', 'compare', 'both', 'which file',
-        'cross-reference', 'maintenance', 'log', 'correct', 'verify', 'compliant',
-        'difference', 'similarity', 'across', 'all documents', 'each file',
-    ]
-
-    q_lower = question.lower()
-    is_cross = any(kw in q_lower for kw in (cross_kw_vi + cross_kw_en))
+    is_cross = _is_cross_question(question)
 
     cross_note_vi = (
         "\n5. Câu hỏi liên quan đến NHIỀU tài liệu:\n"
@@ -173,16 +254,25 @@ def build_multidoc_prompt(question: str, source_docs: list) -> str:
         )
     
 def get_multidoc_answer(question: str, retriever, llm) -> tuple:
+    is_cross = _is_cross_question(question)
+    target_k = MULTI_DOC_RETRIEVER_K
+    fetch_k = target_k * 3 if is_cross else target_k
+
     search_kwargs = getattr(retriever, 'search_kwargs', None)
     original_k = None
     if search_kwargs is not None:
         original_k = search_kwargs.get('k', RETRIEVER_K)
-        search_kwargs['k'] = MULTI_DOC_RETRIEVER_K
+        search_kwargs['k'] = fetch_k
 
-    source_docs = retriever.invoke(question)
+    source_docs = retriever.invoke(question) or []
 
     if search_kwargs is not None and original_k is not None:
         search_kwargs['k'] = original_k
+
+    if is_cross:
+        source_docs = _rebalance_docs_by_file(source_docs, target_k)
+    else:
+        source_docs = source_docs[:target_k]
 
     prompt = build_multidoc_prompt(question, source_docs)
     answer = llm.invoke(prompt)
@@ -230,15 +320,24 @@ def get_multidoc_answer_with_memory(question: str, retriever, llm) -> tuple:
             except Exception:
                 pass
 
+    is_cross = _is_cross_question(standalone)
+    target_k = MULTI_DOC_RETRIEVER_K
+    fetch_k = target_k * 3 if is_cross else target_k
+
     search_kwargs = getattr(retriever, 'search_kwargs', None)
     original_k = None
     if search_kwargs is not None:
         original_k = search_kwargs.get('k', RETRIEVER_K)
-        search_kwargs['k'] = MULTI_DOC_RETRIEVER_K
-    source_docs = retriever.invoke(standalone)
+        search_kwargs['k'] = fetch_k
+    source_docs = retriever.invoke(standalone) or []
 
     if search_kwargs is not None and original_k is not None:
         search_kwargs['k'] = original_k
+
+    if is_cross:
+        source_docs = _rebalance_docs_by_file(source_docs, target_k)
+    else:
+        source_docs = source_docs[:target_k]
 
     context = _format_multidoc_chunks(source_docs)
     needs_calc = _need_calculations(question)
@@ -419,27 +518,18 @@ def get_filtered_retirever(selected_files: list):
     if store is None:
         return st.session_state.get('retriever')
     
-    if not selected_files:
-        return store.as_retriever(
-            search_type='similarity',
-            search_kwargs={'k': MULTI_DOC_RETRIEVER_K},
-        )
-    
-    if len(selected_files) == 1:
-        return store.as_retriever(
-            search_type = 'similarity',
-            search_kwargs = {
-                'k': MULTI_DOC_RETRIEVER_K,
-                'filter': {'source_file': selected_files[0]},
-            },
-        )
-
-    def _multi_filter(meta: dict) -> bool:
-        return meta.get('source_file') in selected_files
-    
-    return store.as_retriever(
+    base = store.as_retriever(
         search_type='similarity',
-        search_kwargs = {'k': MULTI_DOC_RETRIEVER_K, 'filter': _multi_filter},
+        search_kwargs={'k': MULTI_DOC_RETRIEVER_K},
+    )
+
+    if not selected_files:
+        return base
+
+    return _FileFilteredRetriever(
+        base_retriever=base,
+        allowed_files=selected_files,
+        k=MULTI_DOC_RETRIEVER_K,
     )
 
 get_filtered_retirever = get_filtered_retirever

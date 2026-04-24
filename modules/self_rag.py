@@ -35,8 +35,8 @@ def _is_system_query(question: str) -> bool:
     return any(kw in q for kw in _SYSTEM_KW)
 
 def _llm_text(response) -> str:
-    if hasattr(response, 'context'):
-        return response.content.strip()
+    if hasattr(response, 'content'):
+        return (response.content or '').strip()
     return str(response).strip()
 
 def _rewrite_query(question: str, llm) -> str:
