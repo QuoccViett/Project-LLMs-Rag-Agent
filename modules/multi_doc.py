@@ -5,6 +5,7 @@ import streamlit as st
 from langchain_community.document_loaders import PDFPlumberLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
+from langchain_community.retrievers import BM25Retriever
 try:
     from langchain_core.documents import Document
 except Exception:  # pragma: no cover
@@ -69,6 +70,123 @@ def _rebalance_docs_by_file(docs: list, k: int) -> list:
 
 MULTI_DOC_RETRIEVER_K = max(RETRIEVER_K * 2, 20)
 
+# Prompt-size guards (Ollama models often have limited context windows).
+# These caps keep multi-doc mode responsive when 3+ files are loaded.
+MULTI_DOC_MAX_CHUNK_CHARS = int(os.getenv('ADI_MULTI_DOC_MAX_CHUNK_CHARS', '1200'))
+MULTI_DOC_MAX_CONTEXT_CHARS = int(os.getenv('ADI_MULTI_DOC_MAX_CONTEXT_CHARS', '16000'))
+
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    if text is None:
+        return ''
+    s = str(text)
+    if max_chars <= 0 or len(s) <= max_chars:
+        return s
+    return s[: max(0, max_chars - 1)] + '…'
+
+
+def _select_docs_for_context(source_docs: list, preferred_files: list[str] | None = None) -> list:
+    """Pick a subset of docs so the prompt stays under a char budget.
+
+    If preferred_files is given, prioritize those files first.
+    """
+    if not source_docs:
+        return []
+
+    preferred_set = {f for f in (preferred_files or []) if f}
+    if preferred_set:
+        preferred = [d for d in source_docs if _doc_source_file(d) in preferred_set]
+        others = [d for d in source_docs if _doc_source_file(d) not in preferred_set]
+        source_docs = preferred + others
+
+    out = []
+    remaining = MULTI_DOC_MAX_CONTEXT_CHARS
+
+    for doc in source_docs:
+        content = getattr(doc, 'page_content', '') or ''
+        snippet = _truncate_text(content, MULTI_DOC_MAX_CHUNK_CHARS)
+        # Rough overhead per chunk for labels and separators.
+        estimated = len(snippet) + 200
+        if out and estimated > remaining:
+            break
+        if estimated <= remaining:
+            out.append(doc)
+            remaining -= estimated
+
+    # Always keep at least 1 doc if we had any.
+    if not out and source_docs:
+        return [source_docs[0]]
+    return out
+
+
+def _normalize_filename(name: str) -> str:
+    return (name or '').strip().lower()
+
+
+def _detect_files_in_question(question: str) -> list[str]:
+    """Return loaded filenames that appear in the question (case-insensitive).
+
+    This helps when user asks: "Trong file ABC.pdf ...".
+    """
+    q = _normalize_filename(question)
+    if not q:
+        return []
+    registry = st.session_state.get('doc_registry', {}) or {}
+    if not registry:
+        return []
+
+    hits: list[str] = []
+    for fname in registry.keys():
+        f = _normalize_filename(fname)
+        if not f:
+            continue
+        stem = f.rsplit('.', 1)[0]
+        if f in q or (stem and stem in q):
+            hits.append(fname)
+    return hits
+
+
+class _SimpleEnsembleRetriever:
+    """RRF fusion for combining BM25 + Vector retrievers."""
+
+    def __init__(self, retrievers: list, weights: list[float], k: int = RETRIEVER_K):
+        self.retrievers = retrievers
+        self.weights = weights
+        self.search_kwargs = {'k': int(k)}
+
+    def _doc_key(self, doc) -> str:
+        meta = getattr(doc, 'metadata', {}) or {}
+        src = meta.get('source_file', meta.get('source', ''))
+        page = meta.get('page', meta.get('page_number', ''))
+        content = getattr(doc, 'page_content', '') or ''
+        return f"{src}|{page}|{content[:200].strip()}"
+
+    def invoke(self, query: str):
+        k = int(self.search_kwargs.get('k', RETRIEVER_K) or RETRIEVER_K)
+        rrf_k = 60
+        scored: dict[str, tuple[float, any]] = {}
+
+        for retriever, weight in zip(self.retrievers, self.weights):
+            try:
+                docs = retriever.invoke(query) or []
+            except Exception:
+                docs = []
+
+            for rank, doc in enumerate(docs[:k], 1):
+                key = self._doc_key(doc)
+                score = float(weight) * (1.0 / (rrf_k + rank))
+                if key in scored:
+                    prev, keep_doc = scored[key]
+                    scored[key] = (prev + score, keep_doc)
+                else:
+                    scored[key] = (score, doc)
+
+        fused = sorted(scored.values(), key=lambda x: x[0], reverse=True)
+        return [doc for _, doc in fused[:k]]
+
+    def get_relevant_documents(self, query: str):
+        return self.invoke(query)
+
 
 class _FileFilteredRetriever:
     """A thin wrapper that filters retrieved docs by `source_file`.
@@ -84,7 +202,9 @@ class _FileFilteredRetriever:
 
     def invoke(self, query: str):
         k = int(self.search_kwargs.get('k', MULTI_DOC_RETRIEVER_K) or MULTI_DOC_RETRIEVER_K)
-        fetch_k = max(k * 5, 50)
+        # Fetch a bit more than k so filtering can still return enough docs,
+        # but clamp to keep retrieval fast on large multi-doc stores.
+        fetch_k = min(max(k * 3, 30), 120)
 
         base_sk = getattr(self.base_retriever, 'search_kwargs', None)
         original_k = None
@@ -133,7 +253,8 @@ def _format_multidoc_chunks(source_docs: list) -> str:
         if page != '':
             label_parts.append(f'Trang: {int(page) + 1}')
         label = ' | '.join(label_parts)
-        parts.append(f'{label}\n{doc.page_content}')
+        chunk_text = _truncate_text(getattr(doc, 'page_content', '') or '', MULTI_DOC_MAX_CHUNK_CHARS)
+        parts.append(f'{label}\n{chunk_text}')
     return '\n\n---\n\n'.join(parts)
 
 
@@ -146,6 +267,8 @@ def _list_loaded_files() -> str:
 
 def build_multidoc_prompt(question: str, source_docs: list) -> str:
     lang = _detect_language(question)
+    focus_files = _detect_files_in_question(question)
+    source_docs = _select_docs_for_context(source_docs, preferred_files=focus_files)
     context = _format_multidoc_chunks(source_docs)
     needs_calc = _need_calculations(question)
     loaded_files = _list_loaded_files()
@@ -255,8 +378,10 @@ def build_multidoc_prompt(question: str, source_docs: list) -> str:
     
 def get_multidoc_answer(question: str, retriever, llm) -> tuple:
     is_cross = _is_cross_question(question)
+    focus_files = _detect_files_in_question(question) if not is_cross else []
     target_k = MULTI_DOC_RETRIEVER_K
     fetch_k = target_k * 3 if is_cross else target_k
+    fetch_k = min(max(fetch_k, target_k), 120)
 
     search_kwargs = getattr(retriever, 'search_kwargs', None)
     original_k = None
@@ -269,13 +394,30 @@ def get_multidoc_answer(question: str, retriever, llm) -> tuple:
     if search_kwargs is not None and original_k is not None:
         search_kwargs['k'] = original_k
 
+    if focus_files:
+        focused = [d for d in source_docs if _doc_source_file(d) in set(focus_files)]
+        # If the focused file returns anything, stick to it.
+        if focused:
+            source_docs = focused
+
     if is_cross:
         source_docs = _rebalance_docs_by_file(source_docs, target_k)
     else:
         source_docs = source_docs[:target_k]
 
+    source_docs = _select_docs_for_context(source_docs, preferred_files=focus_files)
+
     prompt = build_multidoc_prompt(question, source_docs)
-    answer = llm.invoke(prompt)
+    try:
+        answer = llm.invoke(prompt)
+    except Exception as e:
+        msg = (
+            "Không gọi được LLM trong chế độ Multi-Doc. "
+            "Thường do ngữ cảnh quá dài hoặc Ollama chưa sẵn sàng. "
+            f"Chi tiết lỗi: {e}"
+        )
+        st.error(msg)
+        return msg, source_docs
     return answer, source_docs
 
 def get_multidoc_answer_with_memory(question: str, retriever, llm) -> tuple:
@@ -321,8 +463,10 @@ def get_multidoc_answer_with_memory(question: str, retriever, llm) -> tuple:
                 pass
 
     is_cross = _is_cross_question(standalone)
+    focus_files = _detect_files_in_question(standalone) if not is_cross else []
     target_k = MULTI_DOC_RETRIEVER_K
     fetch_k = target_k * 3 if is_cross else target_k
+    fetch_k = min(max(fetch_k, target_k), 120)
 
     search_kwargs = getattr(retriever, 'search_kwargs', None)
     original_k = None
@@ -334,10 +478,17 @@ def get_multidoc_answer_with_memory(question: str, retriever, llm) -> tuple:
     if search_kwargs is not None and original_k is not None:
         search_kwargs['k'] = original_k
 
+    if focus_files:
+        focused = [d for d in source_docs if _doc_source_file(d) in set(focus_files)]
+        if focused:
+            source_docs = focused
+
     if is_cross:
         source_docs = _rebalance_docs_by_file(source_docs, target_k)
     else:
         source_docs = source_docs[:target_k]
+
+    source_docs = _select_docs_for_context(source_docs, preferred_files=focus_files)
 
     context = _format_multidoc_chunks(source_docs)
     needs_calc = _need_calculations(question)
@@ -429,7 +580,16 @@ def get_multidoc_answer_with_memory(question: str, retriever, llm) -> tuple:
             "Assistant (English only, every fact must have inline source citation):"
         )
 
-    answer = llm.invoke(prompt)
+    try:
+        answer = llm.invoke(prompt)
+    except Exception as e:
+        msg = (
+            "Không gọi được LLM trong chế độ Multi-Doc (Conversational). "
+            "Thường do ngữ cảnh quá dài hoặc Ollama chưa sẵn sàng. "
+            f"Chi tiết lỗi: {e}"
+        )
+        st.error(msg)
+        return msg, source_docs
     answer_text = answer.content if hasattr(answer, 'content') else str(answer)
 
     memory.append(HumanMessage(content=question))
@@ -477,6 +637,11 @@ def add_document(file_bytes: bytes, filename: str, embedder) -> bool:
         if not tagged_chunks:
             st.error('No extractable text found.')
             return False
+
+        # Keep a copy of chunk docs in session for hybrid (BM25) and diagnostics.
+        multi_docs = st.session_state.get('multi_documents', []) or []
+        multi_docs.extend(tagged_chunks)
+        st.session_state['multi_documents'] = multi_docs
         
         existing = st.session_state.get('multi_vector_store')
         if existing is None:
@@ -518,17 +683,52 @@ def get_filtered_retirever(selected_files: list):
     if store is None:
         return st.session_state.get('retriever')
     
-    base = store.as_retriever(
+    # Base vector retriever
+    vector_base = store.as_retriever(
         search_type='similarity',
         search_kwargs={'k': MULTI_DOC_RETRIEVER_K},
     )
 
-    if not selected_files:
-        return base
+    # If user toggled Hybrid search globally, enable it for Multi-Doc too.
+    use_hybrid = bool(st.session_state.get('use_hybrid', False))
 
-    return _FileFilteredRetriever(
-        base_retriever=base,
+    if not selected_files:
+        if not use_hybrid:
+            return vector_base
+
+        docs_all = st.session_state.get('multi_documents', []) or []
+        if not docs_all:
+            return vector_base
+        bm25 = BM25Retriever.from_documents(docs_all)
+        bm25.k = MULTI_DOC_RETRIEVER_K
+        return _SimpleEnsembleRetriever(
+            retrievers=[bm25, vector_base],
+            weights=[0.4, 0.6],
+            k=MULTI_DOC_RETRIEVER_K,
+        )
+
+    # Selected files filter
+    vector_filtered = _FileFilteredRetriever(
+        base_retriever=vector_base,
         allowed_files=selected_files,
+        k=MULTI_DOC_RETRIEVER_K,
+    )
+
+    if not use_hybrid:
+        return vector_filtered
+
+    docs_all = st.session_state.get('multi_documents', []) or []
+    if not docs_all:
+        return vector_filtered
+    docs_filtered = [d for d in docs_all if _doc_source_file(d) in set(selected_files)]
+    if not docs_filtered:
+        return vector_filtered
+
+    bm25 = BM25Retriever.from_documents(docs_filtered)
+    bm25.k = MULTI_DOC_RETRIEVER_K
+    return _SimpleEnsembleRetriever(
+        retrievers=[bm25, vector_filtered],
+        weights=[0.4, 0.6],
         k=MULTI_DOC_RETRIEVER_K,
     )
 
@@ -539,6 +739,11 @@ def remove_document(filename: str):
     registry = st.session_state.get('doc_registry', {})
     registry.pop(filename, None)
     st.session_state['doc_registry'] = registry
+
+    # Best-effort remove from in-memory BM25 docs (FAISS store cannot easily delete).
+    docs = st.session_state.get('multi_documents', []) or []
+    if docs:
+        st.session_state['multi_documents'] = [d for d in docs if _doc_source_file(d) != filename]
 
 
 def _fmt_size(n_bytes: int) -> str:

@@ -155,6 +155,10 @@ def _build_index(raw_docs: list, embedder, chunk_size: int, chunk_overlap: int):
         chunk_overlap = chunk_overlap
     )
     documents = splitter.split_documents(raw_docs)
+    for d in documents:
+        meta = getattr(d, 'metadata', None)
+        if isinstance(meta, dict):
+            meta['adi_is_chunk'] = True
 
     if not documents:
         st.error('No extractable text found in this document.')
@@ -190,6 +194,7 @@ def process_document(file_bytes: bytes, filename: str, embedder):
             meta = getattr(d, 'metadata', None)
             if isinstance(meta, dict):
                 meta['source_file'] = filename
+                meta['adi_is_chunk'] = True
         retriever = cached_store.as_retriever(
             search_type='similarity',
             search_kwargs={'k': RETRIEVER_K},
@@ -274,6 +279,10 @@ def rebuild_index(file_bytes: bytes, filename: str, embedder, chunk_size: int, c
         }
 
     raw_docs = st.session_state.get('raw_docs')
+    # If session raw_docs are already chunks (e.g. loaded from cache),
+    # rebuild from original bytes to avoid double-splitting.
+    if raw_docs and any(getattr(d, 'metadata', {}).get('adi_is_chunk') for d in raw_docs if hasattr(d, 'metadata')):
+        raw_docs = None
     if raw_docs is None:
         ext = filename.rsplit('.', 1)[-1].lower()
         tmp_path = None
