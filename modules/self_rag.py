@@ -4,6 +4,7 @@ from config import (
     RETRIEVER_K, EMBEDDING_MODEL, LLM_MODEL,
     CHUNK_SIZE, CHUNK_OVERLAP        
 )
+from modules.qa_engine import no_answer_message
 
 CONFIDENCE_THRESHOLD = 60
 MAX_RETRIES = 1
@@ -111,7 +112,18 @@ def self_rag_answer(question: str, retriever, llm) -> dict:
         context = _SYSTEM_INFO
         source_docs = []
     else:
-        source_docs = retriever.invoke(rewritten)
+        source_docs = retriever.invoke(rewritten) or []
+        if not source_docs:
+            msg = no_answer_message(question)
+            return {
+                "answer": msg,
+                "source_docs": [],
+                "rewritten_q": rewritten,
+                "confidence": 0,
+                "relevance": 'low',
+                "groundedness": 'not grounded',
+                "retried": False,
+            }
         context = '\n\n'.join(doc.page_content for doc in source_docs)
 
     answer = _generate_answer(context, question, llm)

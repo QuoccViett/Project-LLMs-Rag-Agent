@@ -2,7 +2,7 @@ import os
 import time
 import tempfile
 import streamlit as st
-from langchain_community.document_loaders import PDFPlumberLoader, Docx2txtLoader
+from langchain_community.document_loaders import Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_community.retrievers import BM25Retriever
@@ -12,6 +12,8 @@ except Exception:  # pragma: no cover
     from langchain.schema import Document  # type: ignore
 from config import CHUNK_SIZE, CHUNK_OVERLAP, RETRIEVER_K
 from langchain_core.messages import HumanMessage, AIMessage
+from modules.document_processor import extract_structured_pdf_docs
+from modules.qa_engine import no_answer_message
 
 
 _CROSS_KW_VI = [
@@ -242,6 +244,13 @@ def _need_calculations(question: str) -> bool:
     ]
     return any(kw in question.lower() for kw in calc_keywords)
 
+def _need_exhaustive(question: str) -> bool:
+    exhaustive_keywords = [
+        'tất cả', 'toàn bộ', 'đầy đủ', 'liệt kê', 'danh sách', 'bao gồm', 'gồm',
+        'list', 'all', 'complete', 'full list', 'include', 'including', 'show all',
+    ]
+    return any(kw in question.lower() for kw in exhaustive_keywords)
+
 def _format_multidoc_chunks(source_docs: list) -> str:
     parts = []
     for i, doc in enumerate(source_docs, 1):
@@ -271,6 +280,7 @@ def build_multidoc_prompt(question: str, source_docs: list) -> str:
     source_docs = _select_docs_for_context(source_docs, preferred_files=focus_files)
     context = _format_multidoc_chunks(source_docs)
     needs_calc = _need_calculations(question)
+    needs_full = _need_exhaustive(question)
     loaded_files = _list_loaded_files()
 
     is_cross = _is_cross_question(question)
@@ -305,12 +315,24 @@ def build_multidoc_prompt(question: str, source_docs: list) -> str:
         if needs_calc else ""
     )
 
+    full_vi = (
+        "\n7. Nếu câu hỏi yêu cầu LIỆT KÊ/ĐẦY ĐỦ: phải nêu đủ tất cả mục liên quan"
+        " trong ngữ cảnh, không bỏ sót.\n"
+        if needs_full else ""
+    )
+
     calc_en = (
         "\n6. This question requires calculation or verification:\n"
         "   - Step 1: List each relevant figure with its source (File, Page).\n"
         "   - Step 2: Perform the calculation or comparison step by step.\n"
         "   - Step 3: State a clear conclusion.\n"
         if needs_calc else ""
+    )
+
+    full_en = (
+        "\n7. If the question asks for a LIST/COMPLETE answer: include all relevant items"
+        " in the context, do not omit any.\n"
+        if needs_full else ""
     )
 
     if lang == 'vi':
@@ -322,22 +344,24 @@ def build_multidoc_prompt(question: str, source_docs: list) -> str:
             "   [Đoạn X | File: tên_file | Trang: Y]\n"
             "   KHÔNG lẫn lộn số liệu giữa các trang hoặc giữa các file khác nhau.\n"
             "   KHÔNG dùng kiến thức bên ngoài tài liệu.\n\n"
-            "2. TRÍCH DẪN NGUỒN TRONG TỪNG CÂU — BẮT BUỘC:\n"
+            "2. PHẢI trích nguyên văn từ ngữ cảnh (giữ nguyên cách diễn đạt trong tài liệu). "
+            "KHÔNG diễn giải lại, KHÔNG thêm ý ngoài văn bản.\n\n"
+            "3. TRÍCH DẪN NGUỒN TRONG TỪNG CÂU — BẮT BUỘC:\n"
             "   Mỗi khi nêu thông tin cụ thể, phải ghi ngay sau đó:\n"
             "   (Nguồn: File [tên file], Trang [số trang])\n"
             "   Ví dụ: 'Tổng doanh thu là 500 triệu đồng (Nguồn: File bao_cao.pdf, Trang 3).'\n"
             "   KHÔNG được nêu thông tin mà không có trích dẫn nguồn.\n\n"
-            "3. NGÔN NGỮ — QUY TẮC TUYỆT ĐỐI:\n"
+            "4. NGÔN NGỮ — QUY TẮC TUYỆT ĐỐI:\n"
             "   PHẢI viết HOÀN TOÀN bằng TIẾNG VIỆT.\n"
             "   CẤM TUYỆT ĐỐI: tiếng Trung (中文/汉字), tiếng Anh, tiếng Nga,\n"
             "   tiếng Indonesia, tiếng Nhật hay bất kỳ ngôn ngữ nào khác.\n"
             "   Ví dụ SAI: '根据文件' hoặc 'According to'\n"
             "   Ví dụ ĐÚNG: 'Theo tài liệu' hoặc 'Dựa trên tài liệu'\n\n"
-            "4. Nếu ngữ cảnh KHÔNG có thông tin cho câu hỏi, chỉ nói:\n"
+            "5. Nếu ngữ cảnh KHÔNG có thông tin cho câu hỏi, chỉ nói:\n"
             "   'Tôi không tìm thấy thông tin này trong các tài liệu được cung cấp.'\n"
             "   KHÔNG bịa đặt, suy diễn hay thêm thông tin ngoài ngữ cảnh.\n"
             f"{cross_note_vi}"
-            f"{calc_vi}\n"
+            f"{calc_vi}{full_vi}\n"
             "═══════════════════════════════════════════\n\n"
             f"[NGỮ CẢNH từ các tài liệu]\n{context}\n\n"
             "═══════════════════════════════════════════\n\n"
@@ -353,22 +377,24 @@ def build_multidoc_prompt(question: str, source_docs: list) -> str:
             "   [Chunk X | File: filename | Page: Y]\n"
             "   Do NOT mix figures between different pages or different files.\n"
             "   Do NOT use any knowledge outside the provided documents.\n\n"
-            "2. INLINE CITATION IN EVERY SENTENCE — MANDATORY:\n"
+            "2. Quote verbatim from the context (keep the original wording). "
+            "Do NOT paraphrase or add extra ideas.\n\n"
+            "3. INLINE CITATION IN EVERY SENTENCE — MANDATORY:\n"
             "   After each specific piece of information, immediately add:\n"
             "   (Source: File [filename], Page [number])\n"
             "   Example: 'Total revenue is $500,000 (Source: File report.pdf, Page 3).'\n"
             "   NEVER state information without citing the source.\n\n"
-            "3. LANGUAGE — ABSOLUTE RULE:\n"
+            "4. LANGUAGE — ABSOLUTE RULE:\n"
             "   Reply ENTIRELY in ENGLISH.\n"
             "   FORBIDDEN: Chinese (中文/汉字), Vietnamese, Russian, Indonesian, Japanese\n"
             "   or any other language — not even a single character.\n"
             "   WRONG: '根据文件' or 'Theo tài liệu'\n"
             "   RIGHT: 'According to the document'\n\n"
-            "4. If the context does NOT contain information for the question, say:\n"
+            "5. If the context does NOT contain information for the question, say:\n"
             "   'I cannot find this information in the provided documents.'\n"
             "   Do NOT fabricate, infer, or add information beyond the context.\n"
             f"{cross_note_en}"
-            f"{calc_en}\n"
+            f"{calc_en}{full_en}\n"
             "═══════════════════════════════════════════\n\n"
             f"[CONTEXT from documents]\n{context}\n\n"
             "═══════════════════════════════════════════\n\n"
@@ -378,9 +404,13 @@ def build_multidoc_prompt(question: str, source_docs: list) -> str:
     
 def get_multidoc_answer(question: str, retriever, llm) -> tuple:
     is_cross = _is_cross_question(question)
+    needs_full = _need_exhaustive(question)
     focus_files = _detect_files_in_question(question) if not is_cross else []
     target_k = MULTI_DOC_RETRIEVER_K
     fetch_k = target_k * 3 if is_cross else target_k
+    if needs_full:
+        target_k = max(target_k, 30)
+        fetch_k = max(fetch_k, target_k * 2)
     fetch_k = min(max(fetch_k, target_k), 120)
 
     search_kwargs = getattr(retriever, 'search_kwargs', None)
@@ -406,6 +436,9 @@ def get_multidoc_answer(question: str, retriever, llm) -> tuple:
         source_docs = source_docs[:target_k]
 
     source_docs = _select_docs_for_context(source_docs, preferred_files=focus_files)
+
+    if not source_docs:
+        return no_answer_message(question), []
 
     prompt = build_multidoc_prompt(question, source_docs)
     try:
@@ -463,9 +496,13 @@ def get_multidoc_answer_with_memory(question: str, retriever, llm) -> tuple:
                 pass
 
     is_cross = _is_cross_question(standalone)
+    needs_full = _need_exhaustive(standalone)
     focus_files = _detect_files_in_question(standalone) if not is_cross else []
     target_k = MULTI_DOC_RETRIEVER_K
     fetch_k = target_k * 3 if is_cross else target_k
+    if needs_full:
+        target_k = max(target_k, 30)
+        fetch_k = max(fetch_k, target_k * 2)
     fetch_k = min(max(fetch_k, target_k), 120)
 
     search_kwargs = getattr(retriever, 'search_kwargs', None)
@@ -489,6 +526,13 @@ def get_multidoc_answer_with_memory(question: str, retriever, llm) -> tuple:
         source_docs = source_docs[:target_k]
 
     source_docs = _select_docs_for_context(source_docs, preferred_files=focus_files)
+
+    if not source_docs:
+        msg = no_answer_message(question)
+        memory.append(HumanMessage(content=question))
+        memory.append(AIMessage(content=msg))
+        st.session_state.multi_conv_memory = memory[-6:]
+        return msg, []
 
     context = _format_multidoc_chunks(source_docs)
     needs_calc = _need_calculations(question)
@@ -608,21 +652,55 @@ def add_document(file_bytes: bytes, filename: str, embedder) -> bool:
             tmp.write(file_bytes)
             tmp_path = tmp.name
         if ext == 'pdf':
-            loader = PDFPlumberLoader(tmp_path)
+            raw_docs = extract_structured_pdf_docs(tmp_path, filename)
         elif ext in ('doc', 'docx'):
-            loader = Docx2txtLoader(tmp_path)
+            raw_docs = Docx2txtLoader(tmp_path).load()
         else:
             st.error(f'Unsupport file type: {ext}')
             return False
 
-        raw_docs = loader.load()
+        chunk_size = int(st.session_state.get('chunk_size', CHUNK_SIZE) or CHUNK_SIZE)
+        chunk_overlap = int(st.session_state.get('chunk_overlap', CHUNK_OVERLAP) or CHUNK_OVERLAP)
+        chunk_size_table = max(chunk_size, 4000)
+        chunk_overlap_table = max(chunk_overlap, 200)
 
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size = st.session_state.get('chunk_size', CHUNK_SIZE),
-            chunk_overlap = st.session_state.get('chunk_overlap', CHUNK_OVERLAP),
+        separators = ["\n\n", "\n", ". ", " ", ""]
+        splitter_text = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=separators,
+        )
+        splitter_table = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size_table,
+            chunk_overlap=chunk_overlap_table,
+            separators=separators,
         )
 
-        chunks = splitter.split_documents(raw_docs)
+        raw_docs = raw_docs or []
+        table_docs = [d for d in raw_docs if getattr(d, 'metadata', {}).get('content_type') == 'table']
+        text_docs = [d for d in raw_docs if d not in table_docs]
+
+        chunks = []
+        if text_docs:
+            text_chunks = splitter_text.split_documents(text_docs)
+
+            # Strip page markers from PDF extractor and attach page metadata.
+            page_re = re.compile(r"<ADI_PAGE:(\d+)>")
+            current_page = None
+            for ch in text_chunks:
+                content = ch.page_content or ''
+                markers = page_re.findall(content)
+                if markers:
+                    current_page = int(markers[-1]) - 1
+                meta = getattr(ch, 'metadata', None)
+                if isinstance(meta, dict) and current_page is not None and 'page' not in meta:
+                    meta['page'] = current_page
+                ch.page_content = page_re.sub('', content).strip()
+
+            chunks.extend(text_chunks)
+
+        if table_docs:
+            chunks.extend(splitter_table.split_documents(table_docs))
 
         upload_time = time.strftime("%H:%M %d/%m/%Y")
         tagged_chunks = []
@@ -863,20 +941,39 @@ def render_multi_doc_panel(embedder):
     
         
     all_files = list(registry.keys())
-    selected = st.multiselect(
-        'Filter: search only in...',
-        options=all_files,
+    all_types = sorted({(info.get('ext') or '').upper() for info in registry.values() if info.get('ext')})
+
+    selected_types = st.multiselect(
+        'Filter by type',
+        options=all_types,
         default=[],
-        placeholder='All documets (no filter)',
-        key='doc_filter_select',
-        help='Leave empty to search across all documents.',
+        placeholder='All types',
+        key='doc_filter_types',
+        help='Leave empty to include all file types.',
     )
 
-    if selected:
+    files_by_type = (
+        [f for f, info in registry.items() if (info.get('ext') or '').upper() in set(selected_types)]
+        if selected_types else all_files
+    )
+
+    selected_files = st.multiselect(
+        'Filter: search only in...',
+        options=files_by_type,
+        default=[],
+        placeholder='All documents (no filter)',
+        key='doc_filter_select',
+        help='Leave empty to search across all documents (or all files of the selected type).',
+    )
+
+    # If the user selected types but no specific filenames, filter to all files of those types.
+    allowed_files = selected_files if selected_files else ([] if not selected_types else files_by_type)
+
+    if allowed_files:
         st.markdown(
             f'<span style="font-size:0.75rem;color:#f0a000;">'
-            f"Searching in: {', '.join(selected)}</span>",
+            f"Searching in: {', '.join(allowed_files)}</span>",
             unsafe_allow_html=True,
         )
 
-    return get_filtered_retirever(selected)
+    return get_filtered_retirever(allowed_files)

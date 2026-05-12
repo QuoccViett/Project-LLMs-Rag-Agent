@@ -3,9 +3,16 @@ from config import RETRIEVER_K
 
 # Edited by Copilot: qa_engine probe
 
+NO_ANSWER_VI = 'Tôi không tìm thấy thông tin này trong tài liệu.'
+NO_ANSWER_EN = 'I cannot find this information in the document.'
+
 def _detect_language(text: str) -> str:
     vi_chart = "àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ"
     return 'vi' if any(c in text.lower() for c in vi_chart) else 'en'
+
+
+def no_answer_message(question: str) -> str:
+    return NO_ANSWER_VI if _detect_language(question) == 'vi' else NO_ANSWER_EN
 
 def _needs_calculation(question: str) -> bool:
     calc_keywords = [
@@ -20,6 +27,14 @@ def _needs_calculation(question: str) -> bool:
     q_lower = question.lower()
     return any(kw in q_lower for kw in calc_keywords)
 
+def _needs_exhaustive(question: str) -> bool:
+    exhaustive_keywords = [
+        'tất cả', 'toàn bộ', 'đầy đủ', 'liệt kê', 'danh sách', 'bao gồm', 'gồm',
+        'list', 'all', 'complete', 'full list', 'include', 'including', 'show all',
+    ]
+    q_lower = question.lower()
+    return any(kw in q_lower for kw in exhaustive_keywords)
+
 def _mentions_multiple_pages(question: str) -> bool:
     vi_pages = re.findall(r'trang\s*\d+', question.lower())
     en_pages = re.findall(r'page\s*\d+', question.lower())
@@ -28,13 +43,18 @@ def _mentions_multiple_pages(question: str) -> bool:
 def _format_chunks_with_source(source_docs: list) -> str:
     parts = []
     for i, doc in enumerate(source_docs, 1):
-        page  = doc.metadata.get('page', '')
-        source = doc.metadata.get('source', doc.metadata.get('source_file', ''))
+        meta = getattr(doc, 'metadata', {}) or {}
+        page = meta.get('page', '')
+        source = meta.get('source', meta.get('source_file', ''))
+        content_type = meta.get('content_type', '')
+        table_id = meta.get('table_id', '')
         label_parts = [f'[Đoạn {i}]']
         if source:
             label_parts.append(f'File: {source}')
         if page != '':
             label_parts.append(f'Trang: {int(page) + 1}')
+        if content_type == 'table' and table_id:
+            label_parts.append(f'Bảng: {table_id}')
         label = ' | '.join(label_parts)
         parts.append(f'{label}\n{doc.page_content}')
     return '\n\n---\n\n'.join(parts)
@@ -42,6 +62,7 @@ def _format_chunks_with_source(source_docs: list) -> str:
 def build_prompt(context: str, question: str, source_docs: list = None) -> str:
     lang = _detect_language(question)
     needs_calc = _needs_calculation(question)
+    needs_full = _needs_exhaustive(question)
 
     if source_docs:
         context = _format_chunks_with_source(source_docs)
@@ -54,6 +75,11 @@ def build_prompt(context: str, question: str, source_docs: list = None) -> str:
             "   - Bước 3: Đưa ra kết luận rõ ràng (ví dụ: 'Vượt ngưỡng', 'Cần thực hiện ngay', v.v.)."
             if needs_calc else ""
         )
+        full_instruction = (
+            "\n6. Nếu câu hỏi yêu cầu LIỆT KÊ/ĐẦY ĐỦ: phải nêu đủ tất cả mục liên quan"
+            " xuất hiện trong ngữ cảnh, không bỏ sót."
+            if needs_full else ""
+        )
         return (
             "Bạn là trợ lý AI chuyên trả lời câu hỏi dựa trên tài liệu.\n"
             "Quy tắc bắt buộc:\n"
@@ -61,14 +87,20 @@ def build_prompt(context: str, question: str, source_docs: list = None) -> str:
             "Mỗi đoạn được đánh nhãn [Đoạn X | Trang Y] — "
             "hãy dùng đúng số liệu từ đúng trang, "
             "KHÔNG được lẫn lộn số liệu giữa các trang khác nhau.\n"
-            "2. PHẢI trả lời hoàn toàn bằng TIẾNG VIỆT. "
+            "2. PHẢI trích nguyên văn từ ngữ cảnh (giữ nguyên cách diễn đạt trong tài liệu). "
+            "KHÔNG diễn giải lại, KHÔNG thêm ý ngoài văn bản.\n"
+            "3. BẮT BUỘC liệt kê ĐẦY ĐỦ tất cả các mục, các hàng trong bảng hoặc các ý có trong ngữ cảnh. "
+            "KHÔNG được tự ý rút gọn, tóm tắt hay bỏ sót phần cuối.\n"
+            "4. Nếu câu hỏi yêu cầu trình bày một 'Mục lớn', hãy tổng hợp thông tin từ tất cả các đoạn văn bản "
+            "được cung cấp để tạo thành một câu trả lời toàn diện nhất.\n"
+            "5. PHẢI trả lời hoàn toàn bằng TIẾNG VIỆT. "
             "Tuyệt đối KHÔNG dùng tiếng Anh, tiếng Trung, tiếng Nga, tiếng Indonesia "
             "hay bất kỳ ngôn ngữ nào khác dù chỉ một từ.\n"
-            "3. Nếu không tìm thấy thông tin trong ngữ cảnh, chỉ nói: "
+            "6. Nếu không tìm thấy thông tin trong ngữ cảnh, chỉ nói: "
             "'Tôi không tìm thấy thông tin này trong tài liệu.' "
             "KHÔNG được tự bịa đặt hay suy diễn thêm số liệu.\n"
-            "4. Khi trích dẫn số liệu cụ thể, hãy ghi rõ lấy từ Trang nào."
-            f"{calc_instruction}\n\n"
+            "7. Khi trích dẫn số liệu cụ thể, hãy ghi rõ lấy từ Trang nào."
+            f"{calc_instruction}{full_instruction}\n\n"
             f"Ngữ cảnh:\n{context}\n\n"
             f"Câu hỏi: {question}\n\n"
             "Trả lời (bằng tiếng Việt):"
@@ -81,6 +113,11 @@ def build_prompt(context: str, question: str, source_docs: list = None) -> str:
             "   - Step 3: State a clear conclusion (e.g. 'Exceeds threshold', 'Action required', etc.)."
             if needs_calc else ""
         )
+        full_instruction = (
+            "\n6. If the question asks for a LIST/COMPLETE answer: include all relevant items"
+            " present in the context, do not omit any."
+            if needs_full else ""
+        )
         return (
             "You are an AI assistant that answers questions based strictly on the provided document.\n"
             "Rules:\n"
@@ -88,23 +125,32 @@ def build_prompt(context: str, question: str, source_docs: list = None) -> str:
             "Each chunk is labeled [Chunk X | Page Y] — "
             "use figures from the correct page only, "
             "do NOT mix up figures between different pages.\n"
-            "2. Reply in ENGLISH only. "
+            "2. Quote verbatim from the context (keep the original wording). "
+            "Do NOT paraphrase or add any extra ideas.\n"
+            "3. You MUST list ALL items/rows/points present in the context. "
+            "Do NOT summarize or omit the ending portion.\n"
+            "4. If the question asks for a 'major section', combine information from all provided chunks "
+            "into the most comprehensive answer possible.\n"
+            "5. Reply in ENGLISH only. "
             "Do NOT use Chinese, Russian, Vietnamese, Indonesian "
             "or any other language — not even a single word.\n"
-            "3. If you cannot find the answer, say: "
+            "6. If you cannot find the answer, say: "
             "'I cannot find this information in the document.' "
             "Do NOT fabricate or infer figures.\n"
-            "4. When citing specific figures, mention which Page they come from."
-            f"{calc_instruction}\n\n"
+            "7. When citing specific figures, mention which Page they come from."
+            f"{calc_instruction}{full_instruction}\n\n"
             f"Context:\n{context}\n\n"
             f"Question: {question}\n\n"
             "Answer:"
         )
 
 def get_answer(question: str, retriever, llm) -> tuple[str, list]:
+    needs_full = _needs_exhaustive(question)
     if _mentions_multiple_pages(question):
         page_mentions = re.findall(r'trang\s*\d+|page\s*\d+', question.lower())
         needed_k = max(len(page_mentions) * 2, RETRIEVER_K)
+        if needs_full:
+            needed_k = max(needed_k, max(RETRIEVER_K * 2, 25))
 
         search_kwargs = getattr(retriever, 'search_kwargs', None)
         if search_kwargs is not None:
@@ -115,7 +161,21 @@ def get_answer(question: str, retriever, llm) -> tuple[str, list]:
         else:
             source_docs = retriever.invoke(question)
     else:
-        source_docs = retriever.invoke(question)
+        if needs_full:
+            search_kwargs = getattr(retriever, 'search_kwargs', None)
+            if search_kwargs is not None:
+                original_k = search_kwargs.get('k', RETRIEVER_K)
+                search_kwargs['k'] = max(RETRIEVER_K * 2, 25)
+                source_docs = retriever.invoke(question)
+                search_kwargs['k'] = original_k
+            else:
+                source_docs = retriever.invoke(question)
+        else:
+            source_docs = retriever.invoke(question)
+
+    source_docs = source_docs or []
+    if not source_docs:
+        return no_answer_message(question), []
 
     # context_text  = '\n\n'.join(doc.page_content for doc in source_docs)
     prompt = build_prompt('', question, source_docs=source_docs)

@@ -31,6 +31,7 @@ from modules.comparison_rag import (
 )
 
 from modules.qa_engine import build_prompt
+from modules.qa_engine import no_answer_message
 from langchain_community.vectorstores import FAISS as _F 
 
 
@@ -286,9 +287,10 @@ with tab_single:
                     sources = retrieve_and_rerank(
                         question, active_retriever, fetch_k=RERANK_FERCH_K
                     )
-                    # context = '\n\n'.join(d.page_content for d in sources)
-                    
-                    answer = llm.invoke(build_prompt('', question, source_docs=sources))
+                    if not sources:
+                        answer = no_answer_message(question)
+                    else:
+                        answer = llm.invoke(build_prompt('', question, source_docs=sources))
 
                 elif use_conv:
                     _orig = st.session_state.retriever

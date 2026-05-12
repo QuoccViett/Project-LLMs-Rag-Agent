@@ -20,25 +20,45 @@ def _confirm_action(key: str, label: str, on_confirm):
 def _clear_history():
     st.session_state.chat_history = []
     st.session_state.conv_memory = []
+    st.session_state.multi_conv_memory = []
     st.session_state.last_question = None
     st.session_state.last_answer = None
     st.session_state.last_sources = []
+    st.session_state.multi_last_question = None
+    st.session_state.multi_last_answer = None
+    st.session_state.multi_last_sources = []
     st.toast('Chat history cleared.')
 
-def _clear_document():
+def _clear_vector_store():
+    # Single-doc store
     st.session_state.vector_store = None
     st.session_state.retriever = None
+    st.session_state.hybrid_retriever = None
     st.session_state.doc_name = None
     st.session_state.doc_chunks = 0
-    st.session_state.chat_history = []
-    st.session_state.conv_memory = []
+    st.session_state.doc_bytes = None
+    st.session_state.raw_docs = None
+    st.session_state.documents = None
     st.session_state.last_question = None
     st.session_state.last_answer = None
     st.session_state.last_sources = []
+    st.session_state.conv_memory = []
     st.session_state.uploader_key = st.session_state.get('uploader_key', 0) + 1
-    st.toast('Document and history cleared.')
+
+    # Multi-doc store
+    st.session_state.multi_vector_store = None
+    st.session_state.multi_retriever = None
+    st.session_state.doc_registry = {}
+    st.session_state.multi_documents = []
+    st.session_state.multi_conv_memory = []
+    st.session_state.multi_last_question = None
+    st.session_state.multi_last_answer = None
+    st.session_state.multi_last_sources = []
+    st.session_state.multi_uploader_key = st.session_state.get('multi_uploader_key', 0) + 1
+
+    st.toast('Vector store cleared (documents removed).')
 
 def render_clear_controls():
     st.subheader('Clear data')
-    _confirm_action('history', 'Clear Chat History', _clear_history)
-    _confirm_action('document', 'Clear Uploaded Document', _clear_document)
+    _confirm_action('history', 'Clear History', _clear_history)
+    _confirm_action('vector', 'Clear Vector Store', _clear_vector_store)

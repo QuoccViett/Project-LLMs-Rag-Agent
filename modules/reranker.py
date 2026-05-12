@@ -5,7 +5,7 @@ import streamlit as st
 _cross_encoder = None
 
 CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-RERANK_TOP_N = 7
+RERANK_TOP_N = 10
 
 def _get_cross_encoder():
     global _cross_encoder

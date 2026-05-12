@@ -2,7 +2,7 @@ import streamlit as st
 import re 
 from config import CONV_MEMORY_K, RETRIEVER_K
 from langchain_core.messages import HumanMessage, AIMessage
-from modules.qa_engine import _format_chunks_with_source, _needs_calculation, _mentions_multiple_pages
+from modules.qa_engine import _format_chunks_with_source, _needs_calculation, _mentions_multiple_pages, no_answer_message
 
 def _is_followup(question: str, memory: list) -> bool:
     if not memory:
@@ -176,6 +176,14 @@ def get_answer_with_memory(question: str, retriever, llm) -> tuple[str, list]:
             source_docs = retriever.invoke(standalone)
     else:
         source_docs = retriever.invoke(standalone)
+
+    source_docs = source_docs or []
+    if not source_docs:
+        msg = no_answer_message(question)
+        memory.append(HumanMessage(content=question))
+        memory.append(AIMessage(content=msg))
+        st.session_state.conv_memory = memory[-(CONV_MEMORY_K * 2):]
+        return msg, []
 
     # context = '\n\n'.join(doc.page_content for doc in source_docs)
     prompt = _build_conv_prompt('', question, memory, source_docs)

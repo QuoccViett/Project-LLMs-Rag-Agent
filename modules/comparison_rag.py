@@ -2,6 +2,7 @@ import re
 
 import streamlit as st 
 from config import RETRIEVER_K
+from modules.qa_engine import no_answer_message
 
 _CMP_KEYWORDS = [
     "so sánh", "khác nhau", "điểm khác", "điểm chung", "giống nhau",
@@ -290,6 +291,18 @@ def comparison_rag_answer(question: str, retriever, llm) -> dict:
     sub_queries = decompose_query(question, llm)
     source_docs = multi_retriever(sub_queries, retriever, k_per_query=RETRIEVER_K)
     context, chunks_used = _format_context(source_docs, max_chars=7000)
+
+    if not source_docs or not (context or '').strip():
+        msg = no_answer_message(question)
+        return {
+            'answer': msg,
+            'answer_html': format_answer_html(msg),
+            'source_docs': [],
+            'sub_queries': sub_queries,
+            'strategy': 'comparison_rag',
+            'chunks_used': 0,
+            'lang': lang,
+        }
     prompt = _build_comparison_prompt(question, context)
     raw_resp = llm.invoke(prompt)
     raw_text = raw_resp.content if hasattr(raw_resp, 'content') else str(raw_resp)
