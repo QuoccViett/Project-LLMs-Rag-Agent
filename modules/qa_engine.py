@@ -1,9 +1,11 @@
 import re
 from config import RETRIEVER_K
 
+
 def _detect_language(text: str) -> str:
-    vi_chart = "àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ"
-    return 'vi' if any(c in text.lower() for c in vi_chart) else 'en'
+    vi_chars = "àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ"
+    return 'vi' if any(c in text.lower() for c in vi_chars) else 'en'
+
 
 def _needs_calculation(question: str) -> bool:
     calc_keywords = [
@@ -18,15 +20,17 @@ def _needs_calculation(question: str) -> bool:
     q_lower = question.lower()
     return any(kw in q_lower for kw in calc_keywords)
 
+
 def _mentions_multiple_pages(question: str) -> bool:
     vi_pages = re.findall(r'trang\s*\d+', question.lower())
     en_pages = re.findall(r'page\s*\d+', question.lower())
     return len(vi_pages) >= 2 or len(en_pages) >= 2
 
+
 def _format_chunks_with_source(source_docs: list) -> str:
     parts = []
     for i, doc in enumerate(source_docs, 1):
-        page  = doc.metadata.get('page', '')
+        page   = doc.metadata.get('page', '')
         source = doc.metadata.get('source', doc.metadata.get('source_file', ''))
         label_parts = [f'[Đoạn {i}]']
         if source:
@@ -36,6 +40,7 @@ def _format_chunks_with_source(source_docs: list) -> str:
         label = ' | '.join(label_parts)
         parts.append(f'{label}\n{doc.page_content}')
     return '\n\n---\n\n'.join(parts)
+
 
 def build_prompt(context: str, question: str, source_docs: list = None) -> str:
     lang = _detect_language(question)
@@ -52,24 +57,34 @@ def build_prompt(context: str, question: str, source_docs: list = None) -> str:
             "   - Bước 3: Đưa ra kết luận rõ ràng (ví dụ: 'Vượt ngưỡng', 'Cần thực hiện ngay', v.v.)."
             if needs_calc else ""
         )
+        # NOTE: We repeat the language rule at the very end of the prompt
+        # (just before the model starts generating) because Qwen 7B tends to
+        # drift into English mid-answer when the retrieved context contains
+        # many English technical terms (FAISS, BM25, Retrieval-Augmented…).
+        # Placing the reminder at the generation boundary is the most
+        # effective position to prevent language switching.
         return (
-            "Bạn là trợ lý AI chuyên trả lời câu hỏi dựa trên tài liệu.\n"
-            "Quy tắc bắt buộc:\n"
-            "1. Chỉ sử dụng thông tin có trong phần Ngữ cảnh bên dưới. "
+            "Bạn là trợ lý AI chuyên trả lời câu hỏi dựa trên tài liệu.\n\n"
+            "QUY TẮC BẮT BUỘC — ĐỌC KỸ TRƯỚC KHI TRẢ LỜI:\n"
+            "1. Chỉ sử dụng thông tin có trong phần NGỮ CẢNH bên dưới. "
             "Mỗi đoạn được đánh nhãn [Đoạn X | Trang Y] — "
             "hãy dùng đúng số liệu từ đúng trang, "
             "KHÔNG được lẫn lộn số liệu giữa các trang khác nhau.\n"
-            "2. PHẢI trả lời hoàn toàn bằng TIẾNG VIỆT. "
-            "Tuyệt đối KHÔNG dùng tiếng Anh, tiếng Trung, tiếng Nga, tiếng Indonesia "
-            "hay bất kỳ ngôn ngữ nào khác dù chỉ một từ.\n"
+            "2. NGÔN NGỮ — QUY TẮC TUYỆT ĐỐI KHÔNG ĐƯỢC VI PHẠM:\n"
+            "   • Toàn bộ câu trả lời PHẢI bằng TIẾNG VIỆT, từ đầu đến cuối.\n"
+            "   • CẤM dùng bất kỳ từ tiếng Anh nào trong câu trả lời, kể cả các từ kỹ thuật.\n"
+            "   • Thay thế thuật ngữ tiếng Anh bằng tiếng Việt tương đương:\n"
+            "     chunk → đoạn văn, embedding → vector hóa, retrieval → truy xuất,\n"
+            "     index → chỉ mục, pipeline → luồng xử lý, query → câu truy vấn.\n"
+            "   • Nếu không có từ tiếng Việt, giữ nguyên thuật ngữ nhưng giải thích bằng tiếng Việt.\n"
             "3. Nếu không tìm thấy thông tin trong ngữ cảnh, chỉ nói: "
             "'Tôi không tìm thấy thông tin này trong tài liệu.' "
             "KHÔNG được tự bịa đặt hay suy diễn thêm số liệu.\n"
-            "4. Khi trích dẫn số liệu cụ thể, hãy ghi rõ lấy từ Trang nào."
+            "4. Khi trích dẫn số liệu cụ thể, ghi rõ lấy từ Đoạn/Trang nào, ví dụ [1]."
             f"{calc_instruction}\n\n"
-            f"Ngữ cảnh:\n{context}\n\n"
-            f"Câu hỏi: {question}\n\n"
-            "Trả lời (bằng tiếng Việt):"
+            f"NGỮ CẢNH:\n{context}\n\n"
+            f"CÂU HỎI: {question}\n\n"
+            "TRẢ LỜI HOÀN TOÀN BẰNG TIẾNG VIỆT (không dùng bất kỳ từ tiếng Anh nào):"
         )
     else:
         calc_instruction = (
@@ -80,24 +95,25 @@ def build_prompt(context: str, question: str, source_docs: list = None) -> str:
             if needs_calc else ""
         )
         return (
-            "You are an AI assistant that answers questions based strictly on the provided document.\n"
-            "Rules:\n"
-            "1. Use ONLY the information in the Context section below. "
+            "You are an AI assistant that answers questions based strictly on the provided document.\n\n"
+            "MANDATORY RULES:\n"
+            "1. Use ONLY the information in the CONTEXT section below. "
             "Each chunk is labeled [Chunk X | Page Y] — "
             "use figures from the correct page only, "
             "do NOT mix up figures between different pages.\n"
-            "2. Reply in ENGLISH only. "
+            "2. Reply ENTIRELY in ENGLISH. "
             "Do NOT use Chinese, Russian, Vietnamese, Indonesian "
             "or any other language — not even a single word.\n"
             "3. If you cannot find the answer, say: "
             "'I cannot find this information in the document.' "
             "Do NOT fabricate or infer figures.\n"
-            "4. When citing specific figures, mention which Page they come from."
+            "4. When citing specific figures, mention which Chunk / Page they come from."
             f"{calc_instruction}\n\n"
-            f"Context:\n{context}\n\n"
-            f"Question: {question}\n\n"
-            "Answer:"
+            f"CONTEXT:\n{context}\n\n"
+            f"QUESTION: {question}\n\n"
+            "ANSWER IN ENGLISH ONLY:"
         )
+
 
 def get_answer(question: str, retriever, llm) -> tuple[str, list]:
     if _mentions_multiple_pages(question):
@@ -106,7 +122,7 @@ def get_answer(question: str, retriever, llm) -> tuple[str, list]:
 
         try:
             original_k = retriever.search_kwargs.get('k', RETRIEVER_K)
-            retriever.search_kwrags['k'] = needed_k
+            retriever.search_kwargs['k'] = needed_k   # fixed typo: search_kwrags → search_kwargs
             source_docs = retriever.invoke(question)
             retriever.search_kwargs['k'] = original_k
         except AttributeError:
@@ -114,7 +130,6 @@ def get_answer(question: str, retriever, llm) -> tuple[str, list]:
     else:
         source_docs = retriever.invoke(question)
 
-    # context_text  = '\n\n'.join(doc.page_content for doc in source_docs)
     prompt = build_prompt('', question, source_docs=source_docs)
     answer = llm.invoke(prompt)
     return answer, source_docs

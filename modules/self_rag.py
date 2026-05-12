@@ -55,15 +55,37 @@ def _rewrite_query(question: str, llm) -> str:
     except Exception:
         return question
     
-def _generate_answer(context: str, question: str, llm) -> str:
-    prompt = (
-        "Use the following document context to answer the question. "
-        "If the answer is not in the context, say 'I could not find this in the document.'\n\n"
-        f"Context:\n{context}\n\n"
-        f"Question: {question}\n\n"
-        "Answer:"
-    )
+def _generate_answer(context: str, question: str, llm,
+                     source_docs: list = None) -> str:
+    from modules.qa_engine import _format_chunks_with_source, _detect_language
+    if source_docs:
+        context = _format_chunks_with_source(source_docs)
+    lang = _detect_language(question)
+    if lang == 'vi':
+        prompt = (
+            "Bạn là trợ lý AI chỉ trả lời dựa trên tài liệu được cung cấp.\n"
+            "Quy tắc BẮT BUỘC:\n"
+            "1. CHỈ dùng thông tin trong NGỮ CẢNH bên dưới. "
+            "Mỗi đoạn có nhãn [Đoạn X | Trang Y] — trích dẫn đúng trang.\n"
+            "2. Trả lời HOÀN TOÀN bằng TIẾNG VIỆT.\n"
+            "3. Nếu không tìm thấy: 'Tôi không tìm thấy thông tin này trong tài liệu.'\n"
+            "4. KHÔNG bịa đặt, KHÔNG suy diễn ngoài ngữ cảnh.\n\n"
+            f"NGỮ CẢNH:\n{context}\n\n"
+            f"CÂU HỎI: {question}\n\nTRẢ LỜI:"
+        )
+    else:
+        prompt = (
+            "You are an AI assistant. Answer ONLY using the document context below.\n"
+            "RULES:\n"
+            "1. Use ONLY the CONTEXT below. Each chunk is labeled [Chunk X | Page Y].\n"
+            "2. Reply ENTIRELY in ENGLISH.\n"
+            "3. If not found: 'I cannot find this information in the document.'\n"
+            "4. Do NOT fabricate or infer.\n\n"
+            f"CONTEXT:\n{context}\n\n"
+            f"QUESTION: {question}\n\nANSWER:"
+        )
     return llm.invoke(prompt)
+
 
 def _parse_evaluation(raw: str) -> dict:
     result = {'confidence': 50, 'relevance': 'medium', 'groundedness': 'partial'}
@@ -114,7 +136,7 @@ def self_rag_answer(question: str, retriever, llm) -> dict:
         source_docs = retriever.invoke(rewritten)
         context = '\n\n'.join(doc.page_content for doc in source_docs)
 
-    answer = _generate_answer(context, question, llm)
+    answer = _generate_answer(context, question, llm, source_docs=source_docs)
     evaluation = _evaluate(question, context, answer, llm)
 
     retried = False
@@ -123,7 +145,7 @@ def self_rag_answer(question: str, retriever, llm) -> dict:
         retried = True
         source_docs = retriever.invoke(question)
         context = '\n\n'.join(doc.page_content for doc in source_docs)
-        answer = _generate_answer(context, question, llm)
+        answer = _generate_answer(context, question, llm, source_docs=source_docs)
         evaluation = _evaluate(question, context, answer, llm)
 
     return {

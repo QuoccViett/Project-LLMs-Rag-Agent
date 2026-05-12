@@ -2,7 +2,7 @@
 Hệ thống hỏi đáp tài liệu thông minh sử dụng RAG (Retrieval-Augmented Generation).
 
 ## Công nghệ sử dụng
-- **LLM:** Qwen2.5:7b (qua Ollama)
+- **LLM:** Qwen2.5:7b-instruct-q4_K_M (qua Ollama)
 - **Framework:** Streamlit, LangChain
 - **Vector DB:** FAISS
 - **Embedding:** MPNet (paraphrase-multilingual-mpnet-base-v2)
